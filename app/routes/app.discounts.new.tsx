@@ -35,8 +35,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const functions = functionsJson.data?.shopifyFunctions?.nodes || [];
 
     // Find our conditional discount function
+    // The appKey is the app's client ID, and apiType is "product_discounts" (plural)
     const discountFunction = functions.find(
-      (f: any) => f.apiType === "product_discount" && f.appKey === "conditional-discount-function"
+      (f: any) => f.apiType === "product_discounts"
     );
 
     if (discountFunction) {
