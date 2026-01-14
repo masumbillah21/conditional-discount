@@ -1,17 +1,26 @@
 {
-  "name": "[Example] Discount UI extension",
-  "description": "Discount UI extension",
-  "title": "Discount that applies to product, order and shipping",
+  "name": "Conditional Discount UI Extension",
+  "description": "Create quantity-based conditional discounts",
+  "title": "Quantity-Based Conditional Discount",
   "loading": "Loading...",
-  "percentage": {
-    "Product": "Product discount",
-    "Order": "Order discount",
-    "Shipping": "Shipping discount"
+  "discountType": "Discount Type",
+  "percentage": "Percentage (%)",
+  "fixedAmount": "Fixed Amount",
+  "discountValue": "Discount Value",
+  "threshold": {
+    "label": "Quantity Threshold",
+    "description": "Discount applies to items purchased beyond this quantity",
+    "example": "e.g., Set to 6 to discount items 7 and above"
   },
-  "collections": {
-    "buttonLabel": "Choose collections",
+  "appliesTo": {
+    "label": "Applies to",
     "allProducts": "All products",
-    "collections": "Collections",
-    "appliesTo": "Applies to"
+    "selectedItems": "Selected products or collections",
+    "buttonLabel": "Choose products or collections"
+  },
+  "summary": {
+    "buy": "Buy",
+    "items": "items",
+    "getDiscount": "Get discount on additional items"
   }
 }

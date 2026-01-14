@@ -1,248 +1,237 @@
 import { useEffect } from "react";
-import type {
-  ActionFunctionArgs,
-  HeadersFunction,
-  LoaderFunctionArgs,
-} from "react-router";
-import { useFetcher } from "react-router";
+import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import prisma from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
-  return null;
+  const discountRules = await prisma.discountRule.findMany({
+    where: { shop: session.shop },
+    include: { targets: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return { discountRules };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
+  const { session, admin } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const action = formData.get("action");
+  const id = formData.get("id") as string;
+
+  if (action === "delete" && id) {
+    // Get the discount rule to find Shopify discount ID
+    const rule = await prisma.discountRule.findUnique({
+      where: { id },
+    });
+
+    if (rule?.shopifyDiscountId) {
+      // Delete the Shopify automatic discount
+      await admin.graphql(
+        `#graphql
+        mutation DeleteDiscount($id: ID!) {
+          discountAutomaticDelete(id: $id) {
+            deletedAutomaticDiscountId
+            userErrors {
+              field
+              message
             }
           }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-        },
-      },
-    },
-  );
-  const responseJson = await response.json();
+        }`,
+        { variables: { id: rule.shopifyDiscountId } }
+      );
+    }
 
-  const product = responseJson.data!.productCreate!.product!;
-  const variantId = product.variants.edges[0]!.node!.id!;
+    // Delete from database
+    await prisma.discountRule.delete({
+      where: { id },
+    });
 
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyReactRouterTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
+    return { success: true };
+  }
+
+  if (action === "toggle" && id) {
+    const rule = await prisma.discountRule.findUnique({
+      where: { id },
+    });
+
+    if (rule) {
+      const newStatus = rule.status === "active" ? "inactive" : "active";
+
+      // Update Shopify discount status if exists
+      if (rule.shopifyDiscountId) {
+        if (newStatus === "active") {
+          await admin.graphql(
+            `#graphql
+            mutation ActivateDiscount($id: ID!) {
+              discountAutomaticActivate(id: $id) {
+                automaticDiscountNode {
+                  id
+                }
+                userErrors {
+                  field
+                  message
+                }
+              }
+            }`,
+            { variables: { id: rule.shopifyDiscountId } }
+          );
+        } else {
+          await admin.graphql(
+            `#graphql
+            mutation DeactivateDiscount($id: ID!) {
+              discountAutomaticDeactivate(id: $id) {
+                automaticDiscountNode {
+                  id
+                }
+                userErrors {
+                  field
+                  message
+                }
+              }
+            }`,
+            { variables: { id: rule.shopifyDiscountId } }
+          );
         }
       }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
-  );
 
-  const variantResponseJson = await variantResponse.json();
+      await prisma.discountRule.update({
+        where: { id },
+        data: { status: newStatus },
+      });
+    }
 
-  return {
-    product: responseJson!.data!.productCreate!.product,
-    variant:
-      variantResponseJson!.data!.productVariantsBulkUpdate!.productVariants,
-  };
+    return { success: true };
+  }
+
+  return { success: false };
 };
 
 export default function Index() {
-  const fetcher = useFetcher<typeof action>();
-
+  const { discountRules } = useLoaderData<typeof loader>();
+  const navigate = useNavigate();
+  const fetcher = useFetcher();
   const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
 
   useEffect(() => {
-    if (fetcher.data?.product?.id) {
-      shopify.toast.show("Product created");
+    if (fetcher.data?.success) {
+      shopify.toast.show("Action completed successfully");
     }
-  }, [fetcher.data?.product?.id, shopify]);
+  }, [fetcher.data, shopify]);
 
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+  const handleDelete = (id: string) => {
+    if (confirm("Are you sure you want to delete this discount rule?")) {
+      fetcher.submit({ action: "delete", id }, { method: "POST" });
+    }
+  };
+
+  const handleToggle = (id: string) => {
+    fetcher.submit({ action: "toggle", id }, { method: "POST" });
+  };
 
   return (
-    <s-page heading="Shopify app template">
-      <s-button slot="primary-action" onClick={generateProduct}>
-        Generate a product
+    <s-page heading="Conditional Discounts">
+      <s-button slot="primary-action" onClick={() => navigate("/app/discounts/new")}>
+        Create Discount Rule
       </s-button>
 
-      <s-section heading="Congrats on creating a new Shopify app 🎉">
-        <s-paragraph>
-          This embedded app template uses{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/tools/app-bridge"
-            target="_blank"
-          >
-            App Bridge
-          </s-link>{" "}
-          interface examples like an{" "}
-          <s-link href="/app/additional">additional page in the app nav</s-link>
-          , as well as an{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            Admin GraphQL
-          </s-link>{" "}
-          mutation demo, to provide a starting point for app development.
-        </s-paragraph>
-      </s-section>
-      <s-section heading="Get started with products">
-        <s-paragraph>
-          Generate a product with GraphQL and get the JSON output for that
-          product. Learn more about the{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-            target="_blank"
-          >
-            productCreate
-          </s-link>{" "}
-          mutation in our API references.
-        </s-paragraph>
-        <s-stack direction="inline" gap="base">
-          <s-button
-            onClick={generateProduct}
-            {...(isLoading ? { loading: true } : {})}
-          >
-            Generate a product
-          </s-button>
-          {fetcher.data?.product && (
-            <s-button
-              onClick={() => {
-                shopify.intents.invoke?.("edit:shopify/Product", {
-                  value: fetcher.data?.product?.id,
-                });
-              }}
-              target="_blank"
-              variant="tertiary"
-            >
-              Edit product
-            </s-button>
-          )}
-        </s-stack>
-        {fetcher.data?.product && (
-          <s-section heading="productCreate mutation">
-            <s-stack direction="block" gap="base">
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.product, null, 2)}</code>
-                </pre>
-              </s-box>
-
-              <s-heading>productVariantsBulkUpdate mutation</s-heading>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.variant, null, 2)}</code>
-                </pre>
-              </s-box>
+      {discountRules.length === 0 ? (
+        <s-section>
+          <s-box padding="base" background="subdued" borderRadius="base">
+            <s-stack gap="base" alignItems="center">
+              <s-heading>No discount rules yet</s-heading>
+              <s-paragraph>
+                Create your first conditional discount rule to offer discounts after customers add a
+                certain number of products to their cart.
+              </s-paragraph>
+              <s-button variant="primary" onClick={() => navigate("/app/discounts/new")}>
+                Create Discount Rule
+              </s-button>
             </s-stack>
-          </s-section>
-        )}
-      </s-section>
+          </s-box>
+        </s-section>
+      ) : (
+        <s-section>
+          <s-stack gap="base">
+            {discountRules.map((rule) => (
+              <s-box
+                key={rule.id}
+                padding="base"
+                borderWidth="base"
+                borderRadius="base"
+                background="subdued"
+              >
+                <s-stack gap="base">
+                  <s-stack direction="inline" justifyContent="space-between" alignItems="center">
+                    <s-stack gap="base">
+                      <s-heading>{rule.name}</s-heading>
+                      <s-text tone={rule.status === "active" ? "success" : "neutral"}>
+                        {rule.status === "active" ? "Active" : "Inactive"}
+                      </s-text>
+                    </s-stack>
+                    <s-stack direction="inline" gap="base">
+                      <s-button variant="tertiary" onClick={() => navigate(`/app/discounts/${rule.id}`)}>
+                        Edit
+                      </s-button>
+                      <s-button variant="tertiary" onClick={() => handleToggle(rule.id)}>
+                        {rule.status === "active" ? "Deactivate" : "Activate"}
+                      </s-button>
+                      <s-button variant="tertiary" tone="critical" onClick={() => handleDelete(rule.id)}>
+                        Delete
+                      </s-button>
+                    </s-stack>
+                  </s-stack>
 
-      <s-section slot="aside" heading="App template specs">
-        <s-paragraph>
-          <s-text>Framework: </s-text>
-          <s-link href="https://reactrouter.com/" target="_blank">
-            React Router
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Interface: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/app-home/using-polaris-components"
-            target="_blank"
-          >
-            Polaris web components
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>API: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            GraphQL
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Database: </s-text>
-          <s-link href="https://www.prisma.io/" target="_blank">
-            Prisma
-          </s-link>
-        </s-paragraph>
-      </s-section>
+                  <s-divider />
 
-      <s-section slot="aside" heading="Next steps">
+                  <s-stack direction="inline" gap="base">
+                    <s-stack gap="base">
+                      <s-text>Minimum Products</s-text>
+                      <s-text>{rule.minProducts}</s-text>
+                    </s-stack>
+                    <s-stack gap="base">
+                      <s-text>Max Discounted</s-text>
+                      <s-text>{rule.maxDiscounted ?? "Unlimited"}</s-text>
+                    </s-stack>
+                    <s-stack gap="base">
+                      <s-text>Discount</s-text>
+                      <s-text>
+                        {rule.discountType === "percentage"
+                          ? `${rule.discountValue}%`
+                          : `$${rule.discountValue}`}
+                      </s-text>
+                    </s-stack>
+                    <s-stack gap="base">
+                      <s-text>Targets</s-text>
+                      <s-text>
+                        {rule.targets.length === 0
+                          ? "All Products"
+                          : `${rule.targets.length} ${rule.targets[0]?.targetType}(s)`}
+                      </s-text>
+                    </s-stack>
+                  </s-stack>
+                </s-stack>
+              </s-box>
+            ))}
+          </s-stack>
+        </s-section>
+      )}
+
+      <s-section slot="aside" heading="How it works">
+        <s-paragraph>
+          Conditional discounts apply after customers add a minimum number of qualifying products to
+          their cart.
+        </s-paragraph>
         <s-unordered-list>
-          <s-list-item>
-            Build an{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/getting-started/build-app-example"
-              target="_blank"
-            >
-              example app
-            </s-link>
-          </s-list-item>
-          <s-list-item>
-            Explore Shopify&apos;s API with{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-              target="_blank"
-            >
-              GraphiQL
-            </s-link>
-          </s-list-item>
+          <s-list-item>Set a minimum product threshold (e.g., 6 products)</s-list-item>
+          <s-list-item>Products after the threshold get discounted</s-list-item>
+          <s-list-item>Cheapest items are discounted first</s-list-item>
+          <s-list-item>Optionally limit how many products get discounted</s-list-item>
         </s-unordered-list>
       </s-section>
     </s-page>

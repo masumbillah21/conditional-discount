@@ -10,6 +10,53 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
   const formData = await request.formData();
 
+  // Get the function ID dynamically if not set in env
+  let functionId = process.env.SHOPIFY_CONDITIONAL_DISCOUNT_FUNCTION_ID;
+
+  if (!functionId) {
+    // Query for the function by its handle
+    const functionsResponse = await admin.graphql(
+      `#graphql
+      query {
+        shopifyFunctions(first: 25) {
+          nodes {
+            id
+            apiType
+            title
+            appKey
+          }
+        }
+      }`
+    );
+
+    const functionsJson = await functionsResponse.json();
+    console.log("Functions query response:", JSON.stringify(functionsJson, null, 2));
+
+    const functions = functionsJson.data?.shopifyFunctions?.nodes || [];
+
+    // Find our conditional discount function
+    const discountFunction = functions.find(
+      (f: any) => f.apiType === "product_discount" && f.appKey === "conditional-discount-function"
+    );
+
+    if (discountFunction) {
+      functionId = discountFunction.id;
+      console.log("Found function ID:", functionId);
+    } else {
+      console.error("Available functions:", JSON.stringify(functions, null, 2));
+      console.error("Looking for apiType: product_discount and appKey: conditional-discount-function");
+
+      const errorDetails = functions.length === 0
+        ? "No functions found. The extension may not be deployed or activated yet."
+        : `Found ${functions.length} function(s) but none match. Available: ${functions.map((f: any) => `${f.appKey} (${f.apiType})`).join(", ")}`;
+
+      return {
+        success: false,
+        errors: [{ message: `Discount function not found. ${errorDetails}` }]
+      };
+    }
+  }
+
   const name = formData.get("name") as string;
   const minProducts = parseInt(formData.get("minProducts") as string, 10);
   const maxDiscounted = formData.get("maxDiscounted")
@@ -21,27 +68,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const targetsJson = formData.get("targets") as string;
   const targets = targetsJson ? JSON.parse(targetsJson) : [];
 
-  // Create the discount rule in our database first
-  const discountRule = await prisma.discountRule.create({
-    data: {
-      shop: session.shop,
-      name,
-      minProducts,
-      maxDiscounted,
-      discountType,
-      discountValue,
-      status: "active",
-      targets: {
-        create: targets.map((t: { id: string; title: string; type: string }) => ({
-          targetType: t.type,
-          targetId: t.id,
-          targetTitle: t.title,
-        })),
-      },
-    },
-    include: { targets: true },
-  });
-
   // Prepare metafield configuration for the function
   const functionConfiguration = {
     minProducts,
@@ -52,7 +78,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     targetIds: targets.map((t: { id: string }) => t.id),
   };
 
-  // Create Shopify automatic discount with the function
+  // Create Shopify automatic discount with the function FIRST
   const response = await admin.graphql(
     `#graphql
     mutation CreateAutomaticDiscount($discount: DiscountAutomaticAppInput!) {
@@ -70,7 +96,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       variables: {
         discount: {
           title: name,
-          functionId: process.env.SHOPIFY_CONDITIONAL_DISCOUNT_FUNCTION_ID,
+          functionId: functionId,
           startsAt: new Date().toISOString(),
           metafields: [
             {
@@ -86,21 +112,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   );
 
   const responseJson = await response.json();
+
+  // Log the full response for debugging
+  console.log("Shopify API Response:", JSON.stringify(responseJson, null, 2));
+
+  const userErrors = responseJson.data?.discountAutomaticAppCreate?.userErrors;
+
+  // Check for errors BEFORE creating database record
+  if (userErrors && userErrors.length > 0) {
+    console.error("Shopify API User Errors:", userErrors);
+    return { success: false, errors: userErrors };
+  }
+
   const shopifyDiscountId =
     responseJson.data?.discountAutomaticAppCreate?.automaticAppDiscount?.discountId;
 
-  if (shopifyDiscountId) {
-    // Update our record with the Shopify discount ID
-    await prisma.discountRule.update({
-      where: { id: discountRule.id },
-      data: { shopifyDiscountId },
-    });
+  if (!shopifyDiscountId) {
+    console.error("No discount ID returned from Shopify");
+    return { success: false, errors: [{ message: "Failed to create Shopify discount" }] };
   }
 
-  const userErrors = responseJson.data?.discountAutomaticAppCreate?.userErrors;
-  if (userErrors && userErrors.length > 0) {
-    return { success: false, errors: userErrors };
-  }
+  // Only create the database record if Shopify discount was successful
+  const discountRule = await prisma.discountRule.create({
+    data: {
+      shop: session.shop,
+      name,
+      minProducts,
+      maxDiscounted,
+      discountType,
+      discountValue,
+      status: "active",
+      shopifyDiscountId,
+      targets: {
+        create: targets.map((t: { id: string; title: string; type: string }) => ({
+          targetType: t.type,
+          targetId: t.id,
+          targetTitle: t.title,
+        })),
+      },
+    },
+    include: { targets: true },
+  });
 
   return { success: true, discountRule };
 };
@@ -123,9 +175,11 @@ export default function NewDiscountPage() {
   useEffect(() => {
     if (fetcher.data?.success) {
       shopify.toast.show("Discount rule created successfully");
-      navigate("/app/discounts");
+      navigate("/app");
     } else if (fetcher.data?.errors) {
-      shopify.toast.show("Error creating discount", { isError: true });
+      const errorMessages = fetcher.data.errors.map((e: any) => e.message).join(", ");
+      console.error("Discount creation errors:", fetcher.data.errors);
+      shopify.toast.show(`Error creating discount: ${errorMessages}`, { isError: true });
     }
   }, [fetcher.data, shopify, navigate]);
 
