@@ -1,0 +1,26 @@
+query RunInput {
+  discountNode {
+    metafield(namespace: "$app:conditional-discount-function", key: "function-configuration") {
+      value
+    }
+  }
+  cart {
+    lines {
+      id
+      quantity
+      cost {
+        amountPerQuantity {
+          amount
+        }
+      }
+      merchandise {
+        ... on ProductVariant {
+          id
+          product {
+            id
+          }
+        }
+      }
+    }
+  }
+}

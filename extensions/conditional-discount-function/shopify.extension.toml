@@ -1,0 +1,21 @@
+api_version = "2025-01"
+
+[[extensions]]
+name = "t:name"
+handle = "conditional-discount-function"
+type = "function"
+uid = "52633e9f-7b2a-b8cb-1826-fb30625899e3c54fd23c"
+description = "t:description"
+
+  [[extensions.targeting]]
+  target = "purchase.product-discount.run"
+  input_query = "src/run.graphql"
+  export = "run"
+
+  [extensions.build]
+  command = ""
+  path = "dist/function.wasm"
+
+  [extensions.ui.paths]
+  create = "/app/discounts/new"
+  details = "/app/discounts/:discountId"

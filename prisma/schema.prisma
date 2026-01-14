@@ -32,3 +32,31 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+model DiscountRule {
+  id                String               @id @default(uuid())
+  shop              String
+  name              String
+  minProducts       Int                  @default(1)
+  maxDiscounted     Int?
+  discountType      String               @default("percentage")
+  discountValue     Float
+  status            String               @default("active")
+  shopifyDiscountId String?              @unique
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  targets           DiscountRuleTarget[]
+
+  @@index([shop])
+}
+
+model DiscountRuleTarget {
+  id          String       @id @default(uuid())
+  ruleId      String
+  targetType  String
+  targetId    String
+  targetTitle String
+  rule        DiscountRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId])
+}
