@@ -21,14 +21,19 @@ const EMPTY_DISCOUNT = {
 export function run(input) {
   // Parse configuration from metafield
   const configValue = input?.discountNode?.metafield?.value;
+  console.error("CONFIG VALUE:", configValue);
+
   if (!configValue) {
+    console.error("NO CONFIG FOUND");
     return EMPTY_DISCOUNT;
   }
 
   let config;
   try {
     config = JSON.parse(configValue);
-  } catch {
+    console.error("PARSED CONFIG:", JSON.stringify(config));
+  } catch (e) {
+    console.error("CONFIG PARSE ERROR:", e);
     return EMPTY_DISCOUNT;
   }
 
@@ -40,6 +45,9 @@ export function run(input) {
     targetType = "all",
     targetIds = [],
   } = config;
+
+  console.error("MIN PRODUCTS:", minProducts);
+  console.error("DISCOUNT:", discountType, discountValue);
 
   // Get cart lines
   const cartLines = input?.cart?.lines || [];
@@ -59,26 +67,28 @@ export function run(input) {
     if (!productId) continue;
 
     // Check if product is eligible based on target type
-    // Currently supports "all" and "product" targeting
-    // Collection targeting requires additional GraphQL setup
     let isEligible = false;
 
     if (targetType === "all") {
       isEligible = true;
-    } else if (targetType === "product") {
+    } else if (targetType === "product" && targetIds.length > 0) {
+      isEligible = targetIds.includes(productId);
+    } else if (targetType === "collection" && targetIds.length > 0) {
+      // For collection targeting, check if product is in the target collections
+      // This requires the product's collection IDs to be available in the query
       isEligible = targetIds.includes(productId);
     }
-    // Note: Collection targeting is not currently supported in the function
-    // Products selected via collection in the UI are stored by product ID
 
     if (isEligible) {
       const price = parseFloat(line.cost?.amountPerQuantity?.amount || "0");
       const quantity = line.quantity || 0;
+      const variantId = merchandise.id;
 
       // Add each unit as a separate item for sorting
       for (let i = 0; i < quantity; i++) {
         eligibleItems.push({
           cartLineId: line.id,
+          variantId: variantId,
           price,
         });
       }
@@ -86,14 +96,19 @@ export function run(input) {
   }
 
   const totalEligible = eligibleItems.length;
+  console.error("TOTAL ELIGIBLE ITEMS:", totalEligible);
+  console.error("ELIGIBLE ITEMS:", JSON.stringify(eligibleItems));
 
-  // If we don't have enough products to meet threshold, no discount
+  // If we don't have enough products to exceed threshold, no discount
+  // Need MORE than minProducts to get any discount
   if (totalEligible <= minProducts) {
+    console.error("NOT ENOUGH ITEMS. Need >", minProducts, "have", totalEligible);
     return EMPTY_DISCOUNT;
   }
 
-  // Sort by price ascending (cheapest first)
-  eligibleItems.sort((a, b) => a.price - b.price);
+  // Sort by price DESCENDING (most expensive first)
+  // We want to keep the most expensive items at full price
+  eligibleItems.sort((a, b) => b.price - a.price);
 
   // Calculate how many items get discounted
   const itemsAfterThreshold = totalEligible - minProducts;
@@ -101,24 +116,35 @@ export function run(input) {
     ? Math.min(itemsAfterThreshold, maxDiscounted)
     : itemsAfterThreshold;
 
-  // Skip first minProducts items (threshold), take itemsToDiscount
+  // Take the cheapest items (after skipping the most expensive minProducts items)
   const discountedItems = eligibleItems.slice(minProducts, minProducts + itemsToDiscount);
 
+  console.error("ITEMS TO DISCOUNT:", itemsToDiscount);
+  console.error("DISCOUNTED ITEMS:", JSON.stringify(discountedItems));
+
   if (discountedItems.length === 0) {
+    console.error("NO ITEMS TO DISCOUNT");
     return EMPTY_DISCOUNT;
   }
 
   // Group discounted items by cart_line_id and count quantities
   const lineQuantities = {};
   for (const item of discountedItems) {
-    lineQuantities[item.cartLineId] = (lineQuantities[item.cartLineId] || 0) + 1;
+    const key = item.cartLineId;
+    if (!lineQuantities[key]) {
+      lineQuantities[key] = {
+        variantId: item.variantId,
+        quantity: 0
+      };
+    }
+    lineQuantities[key].quantity += 1;
   }
 
   // Create discount targets
-  const targets = Object.entries(lineQuantities).map(([lineId, qty]) => ({
+  const targets = Object.entries(lineQuantities).map(([lineId, data]) => ({
     productVariant: {
-      id: lineId,
-      quantity: qty,
+      id: data.variantId,
+      quantity: data.quantity,
     },
   }));
 
@@ -127,7 +153,7 @@ export function run(input) {
     ? { percentage: { value: String(discountValue) } }
     : { fixedAmount: { amount: String(discountValue) } };
 
-  return {
+  const result = {
     discountApplicationStrategy: DiscountApplicationStrategy.First,
     discounts: [
       {
@@ -137,4 +163,8 @@ export function run(input) {
       },
     ],
   };
+
+  console.error("FINAL RESULT:", JSON.stringify(result));
+
+  return result;
 }

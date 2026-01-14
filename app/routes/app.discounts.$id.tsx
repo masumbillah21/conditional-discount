@@ -9,19 +9,54 @@ import prisma from "../db.server";
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
+  // Parse URL to check for query parameters
+  const url = new URL(request.url);
+  const idFromQuery = url.searchParams.get('id');
+
+  console.log("Params ID:", params.id);
+  console.log("Query ID:", idFromQuery);
+  console.log("Full URL:", request.url);
+
+  // Use query parameter if params.id is a placeholder
+  let discountId = params.id;
+  if (params.id?.startsWith(":") && idFromQuery) {
+    discountId = idFromQuery;
+  }
+
+  // If still a placeholder, return flag to handle client-side
+  if (discountId?.startsWith(":")) {
+    const firstDiscount = await prisma.discountRule.findFirst({
+      where: { shop: session.shop },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return {
+      discountRule: null,
+      isPlaceholder: true,
+      redirectTo: firstDiscount ? `/app/discounts/${firstDiscount.id}` : "/app"
+    };
+  }
+
+  // Try to find by both our internal ID and Shopify's discount ID
   const discountRule = await prisma.discountRule.findFirst({
     where: {
-      id: params.id,
-      shop: session.shop,
+      OR: [
+        { id: discountId, shop: session.shop },
+        { shopifyDiscountId: discountId, shop: session.shop },
+      ],
     },
     include: { targets: true },
   });
 
   if (!discountRule) {
-    throw new Response("Not found", { status: 404 });
+    return {
+      discountRule: null,
+      isPlaceholder: false,
+      redirectTo: "/app"
+    };
   }
 
-  return { discountRule };
+  return { discountRule, isPlaceholder: false, redirectTo: null };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
@@ -121,31 +156,41 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function EditDiscountPage() {
-  const { discountRule } = useLoaderData<typeof loader>();
+  const { discountRule, redirectTo } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
 
-  const [name, setName] = useState(discountRule.name);
-  const [minProducts, setMinProducts] = useState(String(discountRule.minProducts));
+  // Initialize all state hooks BEFORE any conditional logic
+  const [name, setName] = useState(discountRule?.name || "");
+  const [minProducts, setMinProducts] = useState(discountRule ? String(discountRule.minProducts) : "1");
   const [maxDiscounted, setMaxDiscounted] = useState(
-    discountRule.maxDiscounted ? String(discountRule.maxDiscounted) : ""
+    discountRule?.maxDiscounted ? String(discountRule.maxDiscounted) : ""
   );
-  const [discountType, setDiscountType] = useState(discountRule.discountType);
-  const [discountValue, setDiscountValue] = useState(String(discountRule.discountValue));
+  const [discountType, setDiscountType] = useState(discountRule?.discountType || "percentage");
+  const [discountValue, setDiscountValue] = useState(discountRule ? String(discountRule.discountValue) : "0");
   const [targetType, setTargetType] = useState(
-    discountRule.targets.length > 0 ? discountRule.targets[0].targetType : "all"
+    discountRule?.targets && discountRule.targets.length > 0 ? discountRule.targets[0].targetType : "all"
   );
   const [targets, setTargets] = useState<{ id: string; title: string; type: string }[]>(
-    discountRule.targets.map((t) => ({
+    discountRule?.targets ? discountRule.targets.map((t) => ({
       id: t.targetId,
       title: t.targetTitle,
       type: t.targetType,
-    }))
+    })) : []
   );
 
   const isLoading = fetcher.state === "submitting";
 
+  // ALL useEffect hooks MUST be before any conditional returns
+  // Handle client-side redirect
+  useEffect(() => {
+    if (redirectTo) {
+      navigate(redirectTo, { replace: true });
+    }
+  }, [redirectTo, navigate]);
+
+  // Handle form submission result
   useEffect(() => {
     if (fetcher.data?.success) {
       shopify.toast.show("Discount rule updated successfully");
@@ -154,6 +199,17 @@ export default function EditDiscountPage() {
       shopify.toast.show("Error updating discount", { isError: true });
     }
   }, [fetcher.data, shopify, navigate]);
+
+  // If no discount rule, show loading while redirecting
+  if (!discountRule) {
+    return (
+      <s-page heading="Loading...">
+        <s-section>
+          <s-text>Redirecting...</s-text>
+        </s-section>
+      </s-page>
+    );
+  }
 
   const handleSelectProducts = async () => {
     const selected = await shopify.resourcePicker({
