@@ -1,0 +1,19 @@
+<svg width="1200" height="1200" viewBox="0 0 1200 1200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="1200" height="1200" rx="200" fill="#5C6AC4"/>
+
+  <!-- Discount tag shape -->
+  <path d="M300 400 L700 400 L900 600 L700 800 L300 800 Z" fill="white" opacity="0.95"/>
+
+  <!-- Percentage symbol -->
+  <circle cx="450" cy="500" r="60" fill="none" stroke="#5C6AC4" stroke-width="30"/>
+  <circle cx="600" cy="700" r="60" fill="none" stroke="#5C6AC4" stroke-width="30"/>
+  <line x1="620" y1="480" x2="430" y2="720" stroke="#5C6AC4" stroke-width="30" stroke-linecap="round"/>
+
+  <!-- Condition checkmark -->
+  <circle cx="850" cy="350" r="120" fill="#00D26A"/>
+  <path d="M790 350 L830 390 L910 310" fill="none" stroke="white" stroke-width="35" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Tag hole -->
+  <circle cx="350" cy="600" r="40" fill="#5C6AC4"/>
+</svg>

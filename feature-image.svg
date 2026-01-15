@@ -1,0 +1,79 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="1600" height="900" fill="#F6F6F7"/>
+
+  <!-- Header bar -->
+  <rect width="1600" height="60" fill="#5C6AC4"/>
+  <text x="40" y="38" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="white">Conditional Discount</text>
+
+  <!-- Main content area -->
+  <rect x="40" y="100" width="740" height="760" rx="12" fill="white" stroke="#E1E3E5" stroke-width="2"/>
+
+  <!-- Form Title -->
+  <text x="70" y="150" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#202223">Create Discount Rule</text>
+
+  <!-- Discount Name Field -->
+  <text x="70" y="200" font-family="Arial, sans-serif" font-size="14" fill="#6D7175">Discount Name</text>
+  <rect x="70" y="210" width="680" height="44" rx="8" fill="#F6F6F7" stroke="#8C9196" stroke-width="1"/>
+  <text x="85" y="238" font-family="Arial, sans-serif" font-size="16" fill="#202223">Buy 6 Get 10% Off</text>
+
+  <!-- Minimum Products Field -->
+  <text x="70" y="290" font-family="Arial, sans-serif" font-size="14" fill="#6D7175">Minimum Products Required</text>
+  <rect x="70" y="300" width="320" height="44" rx="8" fill="#F6F6F7" stroke="#8C9196" stroke-width="1"/>
+  <text x="85" y="328" font-family="Arial, sans-serif" font-size="16" fill="#202223">6</text>
+
+  <!-- Discount Value Field -->
+  <text x="430" y="290" font-family="Arial, sans-serif" font-size="14" fill="#6D7175">Discount Value</text>
+  <rect x="430" y="300" width="320" height="44" rx="8" fill="#F6F6F7" stroke="#8C9196" stroke-width="1"/>
+  <text x="445" y="328" font-family="Arial, sans-serif" font-size="16" fill="#202223">10%</text>
+
+  <!-- Target Products Section -->
+  <text x="70" y="390" font-family="Arial, sans-serif" font-size="14" fill="#6D7175">Apply to Products</text>
+  <rect x="70" y="400" width="680" height="44" rx="8" fill="#F6F6F7" stroke="#8C9196" stroke-width="1"/>
+  <text x="85" y="428" font-family="Arial, sans-serif" font-size="16" fill="#202223">All Products</text>
+
+  <!-- Create Button -->
+  <rect x="70" y="480" width="200" height="48" rx="8" fill="#5C6AC4"/>
+  <text x="115" y="510" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="white">Create Discount</text>
+
+  <!-- Right side - Preview -->
+  <rect x="820" y="100" width="740" height="760" rx="12" fill="white" stroke="#E1E3E5" stroke-width="2"/>
+
+  <!-- Preview Title -->
+  <text x="850" y="150" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#202223">Cart Preview</text>
+
+  <!-- Cart Items -->
+  <rect x="850" y="180" width="680" height="100" rx="8" fill="#F6F6F7"/>
+  <text x="880" y="220" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#202223">Product A</text>
+  <text x="880" y="245" font-family="Arial, sans-serif" font-size="14" fill="#6D7175">Qty: 6 × $25.00</text>
+  <text x="1430" y="220" font-family="Arial, sans-serif" font-size="16" fill="#202223" text-anchor="end">$150.00</text>
+
+  <rect x="850" y="300" width="680" height="100" rx="8" fill="#F6F6F7"/>
+  <text x="880" y="340" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#202223">Product B</text>
+  <text x="880" y="365" font-family="Arial, sans-serif" font-size="14" fill="#6D7175">Qty: 2 × $30.00</text>
+  <text x="1430" y="340" font-family="Arial, sans-serif" font-size="16" fill="#6D7175" text-anchor="end" text-decoration="line-through">$60.00</text>
+  <text x="1430" y="365" font-family="Arial, sans-serif" font-size="16" fill="#00A656" text-anchor="end">$54.00</text>
+
+  <!-- Discount Applied Badge -->
+  <rect x="850" y="420" width="680" height="60" rx="8" fill="#E3F1DF"/>
+  <text x="880" y="458" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#00A656">✓ Conditional Discount Applied: -$6.00</text>
+
+  <!-- Subtotal -->
+  <text x="850" y="520" font-family="Arial, sans-serif" font-size="14" fill="#6D7175">Subtotal</text>
+  <text x="1430" y="520" font-family="Arial, sans-serif" font-size="16" fill="#202223" text-anchor="end">$204.00</text>
+
+  <!-- Features list -->
+  <text x="850" y="580" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#202223">How it works:</text>
+
+  <circle cx="870" cy="620" r="8" fill="#5C6AC4"/>
+  <text x="895" y="625" font-family="Arial, sans-serif" font-size="14" fill="#202223">First 6 items at full price</text>
+
+  <circle cx="870" cy="660" r="8" fill="#5C6AC4"/>
+  <text x="895" y="665" font-family="Arial, sans-serif" font-size="14" fill="#202223">Items 7+ get 10% discount</text>
+
+  <circle cx="870" cy="700" r="8" fill="#5C6AC4"/>
+  <text x="895" y="705" font-family="Arial, sans-serif" font-size="14" fill="#202223">No coupon code required</text>
+
+  <circle cx="870" cy="740" r="8" fill="#5C6AC4"/>
+  <text x="895" y="745" font-family="Arial, sans-serif" font-size="14" fill="#202223">Applies automatically at checkout</text>
+</svg>

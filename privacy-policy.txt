@@ -1,0 +1,45 @@
+Privacy Policy for Conditional Discount App
+
+Last Updated: January 15, 2026
+
+1. Introduction
+This Privacy Policy explains how Conditional Discount ("we", "our", or "the App") collects, uses, and protects information when you install and use our Shopify application.
+
+2. Information We Collect
+- Store Information: Store name, domain, and email address
+- Discount Configuration: Settings you create for discount rules
+- Product Data: Product IDs and titles used in discount rules
+
+3. How We Use Information
+We use collected information solely to:
+- Provide discount functionality in your store
+- Apply automatic discounts at checkout
+- Save and manage your discount rules
+
+4. Data Storage
+- Discount rules are stored securely in our database
+- We do not store customer personal information
+- We do not store payment or credit card data
+
+5. Data Sharing
+We do not sell, trade, or share your information with third parties except:
+- When required by law
+- To provide app functionality through Shopify's platform
+
+6. Data Retention
+We retain your data while the app is installed. Upon uninstallation, your discount rules and settings are deleted.
+
+7. Security
+We implement industry-standard security measures to protect your data.
+
+8. Your Rights
+You may request to:
+- Access your stored data
+- Delete your data
+- Export your data
+
+9. Contact
+For privacy questions, contact: support@masum-billah.com
+
+10. Changes
+We may update this policy. Continued use of the app constitutes acceptance of changes.
