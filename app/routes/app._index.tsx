@@ -1,58 +1,73 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
-import { useLoaderData, useNavigate, useFetcher } from "react-router";
+import { useLoaderData, useFetcher, Link, useNavigate } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 
-// Component for handling Shopify web component button clicks
-function ActionButton({
-  onClick,
-  variant,
-  tone,
-  slot,
-  children,
-}: {
-  onClick: () => void;
-  variant?: "auto" | "primary" | "secondary" | "tertiary";
-  tone?: "auto" | "neutral" | "critical";
-  slot?: string;
-  children: React.ReactNode;
-}) {
-  const ref = useRef<HTMLElement | null>(null);
-  const callbackRef = useRef(onClick);
-  callbackRef.current = onClick;
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-
-    const handler = () => callbackRef.current();
-    element.addEventListener("click", handler);
-    return () => element.removeEventListener("click", handler);
-  }, []);
-
-  return (
-    <s-button
-      ref={ref as React.RefObject<any>}
-      variant={variant}
-      tone={tone}
-      slot={slot as Lowercase<string>}
-    >
-      {children}
-    </s-button>
-  );
-}
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
 
   const discountRules = await prisma.discountRule.findMany({
     where: { shop: session.shop },
     include: { targets: true },
     orderBy: { createdAt: "desc" },
   });
+
+  // Sync: Check if Shopify discounts still exist and clean up orphaned records
+  const rulesToCheck = discountRules.filter(rule => rule.shopifyDiscountId);
+
+  if (rulesToCheck.length > 0) {
+    const shopifyIds = rulesToCheck.map(r => r.shopifyDiscountId);
+
+    try {
+      const response = await admin.graphql(
+        `#graphql
+        query CheckDiscounts($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            id
+            ... on DiscountAutomaticNode {
+              automaticDiscount {
+                ... on DiscountAutomaticApp {
+                  title
+                  status
+                }
+              }
+            }
+          }
+        }`,
+        { variables: { ids: shopifyIds } }
+      );
+
+      const responseJson = await response.json();
+      const existingIds = new Set(
+        (responseJson.data?.nodes || [])
+          .filter((node: any) => node !== null)
+          .map((node: any) => node.id)
+      );
+
+      // Delete rules where Shopify discount no longer exists
+      for (const rule of rulesToCheck) {
+        if (rule.shopifyDiscountId && !existingIds.has(rule.shopifyDiscountId)) {
+          await prisma.discountRule.delete({
+            where: { id: rule.id },
+          });
+        }
+      }
+
+      // Re-fetch after cleanup
+      const updatedRules = await prisma.discountRule.findMany({
+        where: { shop: session.shop },
+        include: { targets: true },
+        orderBy: { createdAt: "desc" },
+      });
+
+      return { discountRules: updatedRules };
+    } catch (error) {
+      console.error("Error syncing discounts:", error);
+    }
+  }
 
   return { discountRules };
 };
@@ -153,9 +168,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function Index() {
   const { discountRules } = useLoaderData<typeof loader>();
-  const navigate = useNavigate();
   const fetcher = useFetcher();
   const shopify = useAppBridge();
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (fetcher.data?.success) {
@@ -163,21 +178,27 @@ export default function Index() {
     }
   }, [fetcher.data, shopify]);
 
-  const handleDelete = (id: string) => {
-    if (confirm("Are you sure you want to delete this discount rule?")) {
-      fetcher.submit({ action: "delete", id }, { method: "POST" });
+  // Attach click handler to create button
+  useEffect(() => {
+    const button = document.getElementById("create-discount-btn");
+    if (button) {
+      const handler = () => {
+        navigate("/app/discounts/new");
+      };
+      button.addEventListener("click", handler);
+      return () => button.removeEventListener("click", handler);
     }
-  };
-
-  const handleToggle = (id: string) => {
-    fetcher.submit({ action: "toggle", id }, { method: "POST" });
-  };
+  }, [navigate]);
 
   return (
     <s-page heading="Conditional Discounts">
-      <ActionButton slot="primary-action" onClick={() => navigate("/app/discounts/new")}>
+      <s-button
+        id="create-discount-btn"
+        slot="primary-action"
+        variant="primary"
+      >
         Create Discount Rule
-      </ActionButton>
+      </s-button>
 
       {discountRules.length === 0 ? (
         <s-section>
@@ -188,9 +209,9 @@ export default function Index() {
                 Create your first conditional discount rule to offer discounts after customers add a
                 certain number of products to their cart.
               </s-paragraph>
-              <ActionButton variant="primary" onClick={() => navigate("/app/discounts/new")}>
-                Create Discount Rule
-              </ActionButton>
+              <Link to="/app/discounts/new">
+                <s-button variant="primary">Create Discount Rule</s-button>
+              </Link>
             </s-stack>
           </s-box>
         </s-section>
@@ -214,25 +235,33 @@ export default function Index() {
                       </s-text>
                     </s-stack>
                     <s-stack direction="inline" gap="base">
-                      <ActionButton
-                        variant="tertiary"
-                        onClick={() => navigate(`/app/discounts/${rule.id}`)}
+                      <Link to={`/app/discounts/${rule.id}`}>
+                        <s-button variant="tertiary">Edit</s-button>
+                      </Link>
+                      <fetcher.Form method="POST" style={{ display: "inline" }}>
+                        <input type="hidden" name="action" value="toggle" />
+                        <input type="hidden" name="id" value={rule.id} />
+                        <button type="submit" style={{ all: "unset", cursor: "pointer" }}>
+                          <s-button variant="tertiary">
+                            {rule.status === "active" ? "Deactivate" : "Activate"}
+                          </s-button>
+                        </button>
+                      </fetcher.Form>
+                      <fetcher.Form
+                        method="POST"
+                        style={{ display: "inline" }}
+                        onSubmit={(e) => {
+                          if (!confirm("Are you sure you want to delete this discount rule?")) {
+                            e.preventDefault();
+                          }
+                        }}
                       >
-                        Edit
-                      </ActionButton>
-                      <ActionButton
-                        variant="tertiary"
-                        onClick={() => handleToggle(rule.id)}
-                      >
-                        {rule.status === "active" ? "Deactivate" : "Activate"}
-                      </ActionButton>
-                      <ActionButton
-                        variant="tertiary"
-                        tone="critical"
-                        onClick={() => handleDelete(rule.id)}
-                      >
-                        Delete
-                      </ActionButton>
+                        <input type="hidden" name="action" value="delete" />
+                        <input type="hidden" name="id" value={rule.id} />
+                        <button type="submit" style={{ all: "unset", cursor: "pointer" }}>
+                          <s-button variant="tertiary" tone="critical">Delete</s-button>
+                        </button>
+                      </fetcher.Form>
                     </s-stack>
                   </s-stack>
 

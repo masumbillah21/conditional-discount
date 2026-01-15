@@ -138,12 +138,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   // Update Shopify discount if exists
   if (existingRule.shopifyDiscountId) {
-    await admin.graphql(
+    // First, update the discount title
+    const updateResponse = await admin.graphql(
       `#graphql
       mutation UpdateAutomaticDiscount($id: ID!, $discount: DiscountAutomaticAppInput!) {
         discountAutomaticAppUpdate(id: $id, automaticAppDiscount: $discount) {
           automaticAppDiscount {
             discountId
+            title
           }
           userErrors {
             field
@@ -156,18 +158,57 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           id: existingRule.shopifyDiscountId,
           discount: {
             title: name,
-            metafields: [
-              {
-                namespace: "$app:conditional-discount-function",
-                key: "function-configuration",
-                type: "json",
-                value: JSON.stringify(functionConfiguration),
-              },
-            ],
           },
         },
       }
     );
+
+    const updateJson = await updateResponse.json();
+    const updateErrors = updateJson.data?.discountAutomaticAppUpdate?.userErrors;
+
+    if (updateErrors && updateErrors.length > 0) {
+      console.error("Shopify update errors:", updateErrors);
+      return { success: false, error: updateErrors[0].message };
+    }
+
+    // Then, update the metafield using metafieldsSet
+    const metafieldResponse = await admin.graphql(
+      `#graphql
+      mutation UpdateMetafield($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          metafields {
+            id
+            key
+            value
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }`,
+      {
+        variables: {
+          metafields: [
+            {
+              ownerId: existingRule.shopifyDiscountId,
+              namespace: "$app:conditional-discount-function",
+              key: "function-configuration",
+              type: "json",
+              value: JSON.stringify(functionConfiguration),
+            },
+          ],
+        },
+      }
+    );
+
+    const metafieldJson = await metafieldResponse.json();
+    const metafieldErrors = metafieldJson.data?.metafieldsSet?.userErrors;
+
+    if (metafieldErrors && metafieldErrors.length > 0) {
+      console.error("Metafield update errors:", metafieldErrors);
+      return { success: false, error: metafieldErrors[0].message };
+    }
   }
 
   return { success: true, discountRule };
@@ -193,6 +234,7 @@ export default function EditDiscountPage() {
   const [discountedTargets, setDiscountedTargets] = useState<Target[]>([]);
 
   const isLoading = fetcher.state === "submitting";
+  const [hasSubmitted, setHasSubmitted] = useState(false);
 
   // Handle client-side redirect
   useEffect(() => {
@@ -258,15 +300,44 @@ export default function EditDiscountPage() {
     }
   }, [discountRule]);
 
-  // Handle form submission result
+  // Handle form submission result - only respond to new submissions
   useEffect(() => {
-    if (fetcher.data?.success) {
-      shopify.toast.show("Discount rule updated successfully");
-      navigate("/app");
-    } else if (fetcher.data?.error) {
-      shopify.toast.show("Error updating discount", { isError: true });
+    if (fetcher.state === "idle" && fetcher.data && hasSubmitted) {
+      if (fetcher.data.success) {
+        shopify.toast.show("Discount rule updated successfully");
+        navigate("/app");
+      } else if (fetcher.data.error) {
+        shopify.toast.show(`Error: ${fetcher.data.error}`, { isError: true });
+      }
+      setHasSubmitted(false);
     }
-  }, [fetcher.data, shopify, navigate]);
+  }, [fetcher.state, fetcher.data, hasSubmitted, shopify, navigate]);
+
+  // Attach click handler to the submit button after mount
+  // This must be before any conditional returns to satisfy React's rules of hooks
+  useEffect(() => {
+    const button = document.getElementById("save-changes-btn");
+    if (button) {
+      const handler = () => {
+        if (!isLoading && name && discountValue && discountRule) {
+          const formData = new FormData();
+          formData.append("name", name);
+          formData.append("minProducts", minProducts);
+          if (maxDiscounted) formData.append("maxDiscounted", maxDiscounted);
+          formData.append("discountType", discountType);
+          formData.append("discountValue", discountValue);
+          formData.append("requiredTargetType", requiredTargetType);
+          formData.append("requiredTargets", JSON.stringify(requiredTargets));
+          formData.append("discountedTargetType", discountedTargetType);
+          formData.append("discountedTargets", JSON.stringify(discountedTargets));
+          setHasSubmitted(true);
+          fetcher.submit(formData, { method: "POST" });
+        }
+      };
+      button.addEventListener("click", handler);
+      return () => button.removeEventListener("click", handler);
+    }
+  });
 
   // If no discount rule, show loading while redirecting
   if (!discountRule) {
@@ -357,21 +428,6 @@ export default function EditDiscountPage() {
     setDiscountedTargets(discountedTargets.filter((t) => t.id !== id));
   };
 
-  const handleSubmit = () => {
-    const formData = new FormData();
-    formData.append("name", name);
-    formData.append("minProducts", minProducts);
-    if (maxDiscounted) formData.append("maxDiscounted", maxDiscounted);
-    formData.append("discountType", discountType);
-    formData.append("discountValue", discountValue);
-    formData.append("requiredTargetType", requiredTargetType);
-    formData.append("requiredTargets", JSON.stringify(requiredTargets));
-    formData.append("discountedTargetType", discountedTargetType);
-    formData.append("discountedTargets", JSON.stringify(discountedTargets));
-
-    fetcher.submit(formData, { method: "POST" });
-  };
-
   const renderTargetSelector = (
     role: "required" | "discounted",
     targetType: string,
@@ -452,9 +508,9 @@ export default function EditDiscountPage() {
   return (
     <s-page heading="Edit Discount Rule">
       <s-button
+        id="save-changes-btn"
         slot="primary-action"
         variant="primary"
-        onClick={handleSubmit}
         {...(isLoading ? { loading: true } : {})}
         {...(!name || !discountValue ? { disabled: true } : {})}
       >

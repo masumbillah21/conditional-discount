@@ -116,9 +116,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   );
 
   const responseJson = await response.json();
+  console.log("Create discount response:", JSON.stringify(responseJson, null, 2));
+
   const userErrors = responseJson.data?.discountAutomaticAppCreate?.userErrors;
 
   if (userErrors && userErrors.length > 0) {
+    console.error("Shopify userErrors:", userErrors);
     return { success: false, errors: userErrors };
   }
 
@@ -126,6 +129,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     responseJson.data?.discountAutomaticAppCreate?.automaticAppDiscount?.discountId;
 
   if (!shopifyDiscountId) {
+    console.error("No shopifyDiscountId in response:", responseJson);
     return { success: false, errors: [{ message: "Failed to create Shopify discount" }] };
   }
 
@@ -185,16 +189,21 @@ export default function NewDiscountPage() {
   const [discountedTargets, setDiscountedTargets] = useState<Target[]>([]);
 
   const isLoading = fetcher.state === "submitting";
+  const [hasSubmitted, setHasSubmitted] = useState(false);
 
+  // Handle form submission result - only respond to new submissions
   useEffect(() => {
-    if (fetcher.data?.success) {
-      shopify.toast.show("Discount rule created successfully");
-      navigate("/app");
-    } else if (fetcher.data?.errors) {
-      const errorMessages = fetcher.data.errors.map((e: any) => e.message).join(", ");
-      shopify.toast.show(`Error creating discount: ${errorMessages}`, { isError: true });
+    if (fetcher.state === "idle" && fetcher.data && hasSubmitted) {
+      if (fetcher.data.success) {
+        shopify.toast.show("Discount rule created successfully");
+        navigate("/app");
+      } else if (fetcher.data.errors) {
+        const errorMessages = fetcher.data.errors.map((e: any) => e.message).join(", ");
+        shopify.toast.show(`Error: ${errorMessages}`, { isError: true });
+      }
+      setHasSubmitted(false);
     }
-  }, [fetcher.data, shopify, navigate]);
+  }, [fetcher.state, fetcher.data, hasSubmitted, shopify, navigate]);
 
   // Handlers for required products
   const handleSelectRequiredProducts = async () => {
@@ -286,8 +295,23 @@ export default function NewDiscountPage() {
     formData.append("discountedTargetType", discountedTargetType);
     formData.append("discountedTargets", JSON.stringify(discountedTargets));
 
+    setHasSubmitted(true);
     fetcher.submit(formData, { method: "POST" });
   };
+
+  // Attach click handler to the submit button after mount
+  useEffect(() => {
+    const button = document.getElementById("create-discount-btn");
+    if (button) {
+      const handler = () => {
+        if (!isLoading && name && discountValue) {
+          handleSubmit();
+        }
+      };
+      button.addEventListener("click", handler);
+      return () => button.removeEventListener("click", handler);
+    }
+  });
 
   const renderTargetSelector = (
     role: "required" | "discounted",
@@ -369,9 +393,9 @@ export default function NewDiscountPage() {
   return (
     <s-page heading="Create Discount Rule">
       <s-button
+        id="create-discount-btn"
         slot="primary-action"
         variant="primary"
-        onClick={handleSubmit}
         {...(isLoading ? { loading: true } : {})}
         {...(!name || !discountValue ? { disabled: true } : {})}
       >
