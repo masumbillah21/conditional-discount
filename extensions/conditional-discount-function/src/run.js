@@ -54,9 +54,16 @@ export function run(input) {
 
   // Determine effective target types (handle legacy and new configs)
   const effectiveRequiredTargetType = requiredTargetType || targetType || "all";
-  const effectiveDiscountedTargetType = discountedTargetType || targetType || "all";
   const effectiveRequiredTargetIds = requiredTargetIds.length > 0 ? requiredTargetIds : (targetIds || []);
-  const effectiveDiscountedTargetIds = discountedTargetIds.length > 0 ? discountedTargetIds : (targetIds || []);
+
+  // For discounted products: if not specified, use the same as required products
+  // This handles the common case of "buy 6 of X, get discount on X"
+  const effectiveDiscountedTargetType = discountedTargetIds.length > 0
+    ? (discountedTargetType || "product")
+    : (discountedTargetType === "all" ? "all" : effectiveRequiredTargetType);
+  const effectiveDiscountedTargetIds = discountedTargetIds.length > 0
+    ? discountedTargetIds
+    : effectiveRequiredTargetIds;
 
   console.error("MIN PRODUCTS:", minProducts);
   console.error("DISCOUNT:", discountType, discountValue);
@@ -135,15 +142,14 @@ export function run(input) {
     return EMPTY_DISCOUNT;
   }
 
-  // Sort discountable items by price (most expensive first for discounting)
-  discountableItems.sort((a, b) => b.price - a.price);
-
   // Calculate how many items get discounted
-  // Items AFTER the minProducts threshold get discounted
+  // Only items ABOVE the minimum threshold get discounted
+  // First minProducts items don't get discount, items after that do
+  // e.g., if minProducts=6 and cart has 8 items, only 2 items get discounted
   const itemsAboveThreshold = discountableItems.length - minProducts;
 
   if (itemsAboveThreshold <= 0) {
-    console.error("NO ITEMS ABOVE THRESHOLD TO DISCOUNT");
+    console.error("NO ITEMS ABOVE THRESHOLD. Need more than", minProducts, "items to get discount");
     return EMPTY_DISCOUNT;
   }
 
@@ -151,8 +157,8 @@ export function run(input) {
     ? Math.min(itemsAboveThreshold, maxDiscounted)
     : itemsAboveThreshold;
 
-  // Take the cheapest items to discount (from items above threshold)
-  const discountedItems = discountableItems.slice(0, itemsToDiscount);
+  // Skip the first minProducts items (cheapest ones), discount the rest
+  const discountedItems = discountableItems.slice(minProducts, minProducts + itemsToDiscount);
 
   console.error("ITEMS TO DISCOUNT:", itemsToDiscount);
   console.error("DISCOUNTED ITEMS:", JSON.stringify(discountedItems));

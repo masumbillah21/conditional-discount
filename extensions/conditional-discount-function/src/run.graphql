@@ -14,6 +14,7 @@ query RunInput {
         }
       }
       merchandise {
+        __typename
         ... on ProductVariant {
           id
           product {
