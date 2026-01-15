@@ -144,8 +144,8 @@ export function run(input) {
 
   // Calculate how many items get discounted
   // Only items ABOVE the minimum threshold get discounted
-  // First minProducts items don't get discount, items after that do
-  // e.g., if minProducts=6 and cart has 8 items, only 2 items get discounted
+  // First minProducts items (cheapest) don't get discount, items after that do
+  // e.g., if minProducts=6 and cart has 8 items, only 2 most expensive items get discounted
   const itemsAboveThreshold = discountableItems.length - minProducts;
 
   if (itemsAboveThreshold <= 0) {
@@ -157,7 +157,7 @@ export function run(input) {
     ? Math.min(itemsAboveThreshold, maxDiscounted)
     : itemsAboveThreshold;
 
-  // Skip the first minProducts items (cheapest ones), discount the rest
+  // Skip the first minProducts items (cheapest ones), discount the more expensive ones
   const discountedItems = discountableItems.slice(minProducts, minProducts + itemsToDiscount);
 
   console.error("ITEMS TO DISCOUNT:", itemsToDiscount);
