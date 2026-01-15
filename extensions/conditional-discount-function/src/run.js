@@ -43,19 +43,25 @@ export function run(input) {
     discountType = "percentage",
     discountValue = 0,
     // New separate targeting
-    requiredTargetType = "all",
+    requiredTargetType,
     requiredTargetIds = [],
-    discountedTargetType = "all",
+    discountedTargetType,
     discountedTargetIds = [],
     // Legacy support
     targetType,
     targetIds,
   } = config;
 
+  // Determine effective target types (handle legacy and new configs)
+  const effectiveRequiredTargetType = requiredTargetType || targetType || "all";
+  const effectiveDiscountedTargetType = discountedTargetType || targetType || "all";
+  const effectiveRequiredTargetIds = requiredTargetIds.length > 0 ? requiredTargetIds : (targetIds || []);
+  const effectiveDiscountedTargetIds = discountedTargetIds.length > 0 ? discountedTargetIds : (targetIds || []);
+
   console.error("MIN PRODUCTS:", minProducts);
   console.error("DISCOUNT:", discountType, discountValue);
-  console.error("REQUIRED TARGET TYPE:", requiredTargetType);
-  console.error("DISCOUNTED TARGET TYPE:", discountedTargetType);
+  console.error("EFFECTIVE REQUIRED TARGET TYPE:", effectiveRequiredTargetType);
+  console.error("EFFECTIVE DISCOUNTED TARGET TYPE:", effectiveDiscountedTargetType);
 
   // Get cart lines
   const cartLines = input?.cart?.lines || [];
@@ -80,25 +86,12 @@ export function run(input) {
 
     // Check if product counts toward the required quantity
     let isRequired = false;
-    // Handle legacy config (single targetType/targetIds)
-    if (targetType && !requiredTargetType) {
-      // Legacy mode - same products are both required and discounted
-      if (targetType === "all") {
-        isRequired = true;
-      } else if (targetType === "product" && targetIds?.length > 0) {
-        isRequired = targetIds.includes(productId);
-      } else if (targetType === "collection" && targetIds?.length > 0) {
-        isRequired = targetIds.includes(productId);
-      }
-    } else {
-      // New mode - separate required and discounted products
-      if (requiredTargetType === "all") {
-        isRequired = true;
-      } else if (requiredTargetType === "product" && requiredTargetIds.length > 0) {
-        isRequired = requiredTargetIds.includes(productId);
-      } else if (requiredTargetType === "collection" && requiredTargetIds.length > 0) {
-        isRequired = requiredTargetIds.includes(productId);
-      }
+    if (effectiveRequiredTargetType === "all") {
+      isRequired = true;
+    } else if (effectiveRequiredTargetType === "product" && effectiveRequiredTargetIds.length > 0) {
+      isRequired = effectiveRequiredTargetIds.includes(productId);
+    } else if (effectiveRequiredTargetType === "collection" && effectiveRequiredTargetIds.length > 0) {
+      isRequired = effectiveRequiredTargetIds.includes(productId);
     }
 
     if (isRequired) {
@@ -107,25 +100,12 @@ export function run(input) {
 
     // Check if product can be discounted
     let isDiscountable = false;
-    // Handle legacy config
-    if (targetType && !discountedTargetType) {
-      // Legacy mode - same products are both required and discounted
-      if (targetType === "all") {
-        isDiscountable = true;
-      } else if (targetType === "product" && targetIds?.length > 0) {
-        isDiscountable = targetIds.includes(productId);
-      } else if (targetType === "collection" && targetIds?.length > 0) {
-        isDiscountable = targetIds.includes(productId);
-      }
-    } else {
-      // New mode - separate required and discounted products
-      if (discountedTargetType === "all") {
-        isDiscountable = true;
-      } else if (discountedTargetType === "product" && discountedTargetIds.length > 0) {
-        isDiscountable = discountedTargetIds.includes(productId);
-      } else if (discountedTargetType === "collection" && discountedTargetIds.length > 0) {
-        isDiscountable = discountedTargetIds.includes(productId);
-      }
+    if (effectiveDiscountedTargetType === "all") {
+      isDiscountable = true;
+    } else if (effectiveDiscountedTargetType === "product" && effectiveDiscountedTargetIds.length > 0) {
+      isDiscountable = effectiveDiscountedTargetIds.includes(productId);
+    } else if (effectiveDiscountedTargetType === "collection" && effectiveDiscountedTargetIds.length > 0) {
+      isDiscountable = effectiveDiscountedTargetIds.includes(productId);
     }
 
     if (isDiscountable) {
@@ -155,15 +135,23 @@ export function run(input) {
     return EMPTY_DISCOUNT;
   }
 
-  // Sort discountable items by price (cheapest first for discounting)
-  discountableItems.sort((a, b) => a.price - b.price);
+  // Sort discountable items by price (most expensive first for discounting)
+  discountableItems.sort((a, b) => b.price - a.price);
 
   // Calculate how many items get discounted
-  const itemsToDiscount = maxDiscounted
-    ? Math.min(discountableItems.length, maxDiscounted)
-    : discountableItems.length;
+  // Items AFTER the minProducts threshold get discounted
+  const itemsAboveThreshold = discountableItems.length - minProducts;
 
-  // Take the items to discount
+  if (itemsAboveThreshold <= 0) {
+    console.error("NO ITEMS ABOVE THRESHOLD TO DISCOUNT");
+    return EMPTY_DISCOUNT;
+  }
+
+  const itemsToDiscount = maxDiscounted
+    ? Math.min(itemsAboveThreshold, maxDiscounted)
+    : itemsAboveThreshold;
+
+  // Take the cheapest items to discount (from items above threshold)
   const discountedItems = discountableItems.slice(0, itemsToDiscount);
 
   console.error("ITEMS TO DISCOUNT:", itemsToDiscount);
@@ -188,7 +176,7 @@ export function run(input) {
   }
 
   // Create discount targets using cartLine
-  const targets = Object.entries(lineQuantities).map(([lineId, data]) => ({
+  const targets = Object.values(lineQuantities).map((data) => ({
     cartLine: {
       id: data.cartLineId,
       quantity: data.quantity,
@@ -196,9 +184,13 @@ export function run(input) {
   }));
 
   // Create the discount value
+  // For percentage, Shopify expects a string like "10" for 10%
   const value = discountType === "percentage"
     ? { percentage: { value: String(discountValue) } }
     : { fixedAmount: { amount: String(discountValue) } };
+
+  console.error("DISCOUNT VALUE:", JSON.stringify(value));
+  console.error("TARGETS:", JSON.stringify(targets));
 
   const result = {
     discountApplicationStrategy: DiscountApplicationStrategy.First,
