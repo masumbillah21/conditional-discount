@@ -6,6 +6,12 @@ import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 
+interface Target {
+  id: string;
+  title: string;
+  type: string;
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -14,7 +20,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   let functionId = process.env.SHOPIFY_CONDITIONAL_DISCOUNT_FUNCTION_ID;
 
   if (!functionId) {
-    // Query for the function by its handle
     const functionsResponse = await admin.graphql(
       `#graphql
       query {
@@ -30,27 +35,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
 
     const functionsJson = await functionsResponse.json();
-    console.log("Functions query response:", JSON.stringify(functionsJson, null, 2));
-
     const functions = functionsJson.data?.shopifyFunctions?.nodes || [];
-
-    // Find our conditional discount function
-    // The appKey is the app's client ID, and apiType is "product_discounts" (plural)
     const discountFunction = functions.find(
       (f: any) => f.apiType === "product_discounts"
     );
 
     if (discountFunction) {
       functionId = discountFunction.id;
-      console.log("Found function ID:", functionId);
     } else {
-      console.error("Available functions:", JSON.stringify(functions, null, 2));
-      console.error("Looking for apiType: product_discount and appKey: conditional-discount-function");
-
       const errorDetails = functions.length === 0
         ? "No functions found. The extension may not be deployed or activated yet."
-        : `Found ${functions.length} function(s) but none match. Available: ${functions.map((f: any) => `${f.appKey} (${f.apiType})`).join(", ")}`;
-
+        : `Found ${functions.length} function(s) but none match.`;
       return {
         success: false,
         errors: [{ message: `Discount function not found. ${errorDetails}` }]
@@ -65,9 +60,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     : null;
   const discountType = formData.get("discountType") as string;
   const discountValue = parseFloat(formData.get("discountValue") as string);
-  const targetType = formData.get("targetType") as string;
-  const targetsJson = formData.get("targets") as string;
-  const targets = targetsJson ? JSON.parse(targetsJson) : [];
+
+  // Get required and discounted targets separately
+  const requiredTargetType = formData.get("requiredTargetType") as string;
+  const requiredTargetsJson = formData.get("requiredTargets") as string;
+  const requiredTargets = requiredTargetsJson ? JSON.parse(requiredTargetsJson) : [];
+
+  const discountedTargetType = formData.get("discountedTargetType") as string;
+  const discountedTargetsJson = formData.get("discountedTargets") as string;
+  const discountedTargets = discountedTargetsJson ? JSON.parse(discountedTargetsJson) : [];
 
   // Prepare metafield configuration for the function
   const functionConfiguration = {
@@ -75,11 +76,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     maxDiscounted,
     discountType,
     discountValue,
-    targetType,
-    targetIds: targets.map((t: { id: string }) => t.id),
+    requiredTargetType,
+    requiredTargetIds: requiredTargets.map((t: Target) => t.id),
+    discountedTargetType,
+    discountedTargetIds: discountedTargets.map((t: Target) => t.id),
   };
 
-  // Create Shopify automatic discount with the function FIRST
+  // Create Shopify automatic discount with the function
   const response = await admin.graphql(
     `#graphql
     mutation CreateAutomaticDiscount($discount: DiscountAutomaticAppInput!) {
@@ -113,15 +116,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   );
 
   const responseJson = await response.json();
-
-  // Log the full response for debugging
-  console.log("Shopify API Response:", JSON.stringify(responseJson, null, 2));
-
   const userErrors = responseJson.data?.discountAutomaticAppCreate?.userErrors;
 
-  // Check for errors BEFORE creating database record
   if (userErrors && userErrors.length > 0) {
-    console.error("Shopify API User Errors:", userErrors);
     return { success: false, errors: userErrors };
   }
 
@@ -129,11 +126,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     responseJson.data?.discountAutomaticAppCreate?.automaticAppDiscount?.discountId;
 
   if (!shopifyDiscountId) {
-    console.error("No discount ID returned from Shopify");
     return { success: false, errors: [{ message: "Failed to create Shopify discount" }] };
   }
 
-  // Only create the database record if Shopify discount was successful
+  // Create database record with both required and discounted targets
+  const allTargets = [
+    ...requiredTargets.map((t: Target) => ({
+      targetType: t.type,
+      targetId: t.id,
+      targetTitle: t.title,
+      role: "required",
+    })),
+    ...discountedTargets.map((t: Target) => ({
+      targetType: t.type,
+      targetId: t.id,
+      targetTitle: t.title,
+      role: "discounted",
+    })),
+  ];
+
   const discountRule = await prisma.discountRule.create({
     data: {
       shop: session.shop,
@@ -145,11 +156,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       status: "active",
       shopifyDiscountId,
       targets: {
-        create: targets.map((t: { id: string; title: string; type: string }) => ({
-          targetType: t.type,
-          targetId: t.id,
-          targetTitle: t.title,
-        })),
+        create: allTargets,
       },
     },
     include: { targets: true },
@@ -168,8 +175,14 @@ export default function NewDiscountPage() {
   const [maxDiscounted, setMaxDiscounted] = useState("");
   const [discountType, setDiscountType] = useState("percentage");
   const [discountValue, setDiscountValue] = useState("10");
-  const [targetType, setTargetType] = useState("all");
-  const [targets, setTargets] = useState<{ id: string; title: string; type: string }[]>([]);
+
+  // Required products (products that must be in cart to trigger discount)
+  const [requiredTargetType, setRequiredTargetType] = useState("all");
+  const [requiredTargets, setRequiredTargets] = useState<Target[]>([]);
+
+  // Discounted products (products that will receive the discount)
+  const [discountedTargetType, setDiscountedTargetType] = useState("all");
+  const [discountedTargets, setDiscountedTargets] = useState<Target[]>([]);
 
   const isLoading = fetcher.state === "submitting";
 
@@ -179,20 +192,19 @@ export default function NewDiscountPage() {
       navigate("/app");
     } else if (fetcher.data?.errors) {
       const errorMessages = fetcher.data.errors.map((e: any) => e.message).join(", ");
-      console.error("Discount creation errors:", fetcher.data.errors);
       shopify.toast.show(`Error creating discount: ${errorMessages}`, { isError: true });
     }
   }, [fetcher.data, shopify, navigate]);
 
-  const handleSelectProducts = async () => {
+  // Handlers for required products
+  const handleSelectRequiredProducts = async () => {
     const selected = await shopify.resourcePicker({
       type: "product",
       multiple: true,
-      selectionIds: targets.filter((t) => t.type === "product").map((t) => ({ id: t.id })),
+      selectionIds: requiredTargets.filter((t) => t.type === "product").map((t) => ({ id: t.id })),
     });
-
     if (selected) {
-      setTargets(
+      setRequiredTargets(
         selected.map((p: { id: string; title: string }) => ({
           id: p.id,
           title: p.title,
@@ -202,15 +214,14 @@ export default function NewDiscountPage() {
     }
   };
 
-  const handleSelectCollections = async () => {
+  const handleSelectRequiredCollections = async () => {
     const selected = await shopify.resourcePicker({
       type: "collection",
       multiple: true,
-      selectionIds: targets.filter((t) => t.type === "collection").map((t) => ({ id: t.id })),
+      selectionIds: requiredTargets.filter((t) => t.type === "collection").map((t) => ({ id: t.id })),
     });
-
     if (selected) {
-      setTargets(
+      setRequiredTargets(
         selected.map((c: { id: string; title: string }) => ({
           id: c.id,
           title: c.title,
@@ -220,8 +231,47 @@ export default function NewDiscountPage() {
     }
   };
 
-  const removeTarget = (id: string) => {
-    setTargets(targets.filter((t) => t.id !== id));
+  const removeRequiredTarget = (id: string) => {
+    setRequiredTargets(requiredTargets.filter((t) => t.id !== id));
+  };
+
+  // Handlers for discounted products
+  const handleSelectDiscountedProducts = async () => {
+    const selected = await shopify.resourcePicker({
+      type: "product",
+      multiple: true,
+      selectionIds: discountedTargets.filter((t) => t.type === "product").map((t) => ({ id: t.id })),
+    });
+    if (selected) {
+      setDiscountedTargets(
+        selected.map((p: { id: string; title: string }) => ({
+          id: p.id,
+          title: p.title,
+          type: "product",
+        }))
+      );
+    }
+  };
+
+  const handleSelectDiscountedCollections = async () => {
+    const selected = await shopify.resourcePicker({
+      type: "collection",
+      multiple: true,
+      selectionIds: discountedTargets.filter((t) => t.type === "collection").map((t) => ({ id: t.id })),
+    });
+    if (selected) {
+      setDiscountedTargets(
+        selected.map((c: { id: string; title: string }) => ({
+          id: c.id,
+          title: c.title,
+          type: "collection",
+        }))
+      );
+    }
+  };
+
+  const removeDiscountedTarget = (id: string) => {
+    setDiscountedTargets(discountedTargets.filter((t) => t.id !== id));
   };
 
   const handleSubmit = () => {
@@ -231,11 +281,90 @@ export default function NewDiscountPage() {
     if (maxDiscounted) formData.append("maxDiscounted", maxDiscounted);
     formData.append("discountType", discountType);
     formData.append("discountValue", discountValue);
-    formData.append("targetType", targetType);
-    formData.append("targets", JSON.stringify(targets));
+    formData.append("requiredTargetType", requiredTargetType);
+    formData.append("requiredTargets", JSON.stringify(requiredTargets));
+    formData.append("discountedTargetType", discountedTargetType);
+    formData.append("discountedTargets", JSON.stringify(discountedTargets));
 
     fetcher.submit(formData, { method: "POST" });
   };
+
+  const renderTargetSelector = (
+    role: "required" | "discounted",
+    targetType: string,
+    setTargetType: (value: string) => void,
+    targets: Target[],
+    handleSelectProducts: () => void,
+    handleSelectCollections: () => void,
+    removeTarget: (id: string) => void
+  ) => (
+    <s-stack gap="base">
+      <s-select
+        label={role === "required" ? "Required products type" : "Discounted products type"}
+        value={targetType}
+        onChange={(event) => {
+          setTargetType(event.currentTarget.value);
+          if (event.currentTarget.value === "all") {
+            if (role === "required") {
+              setRequiredTargets([]);
+            } else {
+              setDiscountedTargets([]);
+            }
+          }
+        }}
+      >
+        <s-option value="all">All Products</s-option>
+        <s-option value="product">Specific Products</s-option>
+        <s-option value="collection">Specific Collections</s-option>
+      </s-select>
+
+      {targetType === "product" && (
+        <s-stack gap="base">
+          <s-button onClick={handleSelectProducts}>Select Products</s-button>
+          {targets.length > 0 && (
+            <s-stack gap="base">
+              {targets.map((target) => (
+                <s-stack
+                  key={target.id}
+                  direction="inline"
+                  alignItems="center"
+                  justifyContent="space-between"
+                >
+                  <s-text>{target.title}</s-text>
+                  <s-button variant="tertiary" onClick={() => removeTarget(target.id)}>
+                    <s-icon type="x-circle" />
+                  </s-button>
+                </s-stack>
+              ))}
+            </s-stack>
+          )}
+        </s-stack>
+      )}
+
+      {targetType === "collection" && (
+        <s-stack gap="base">
+          <s-button onClick={handleSelectCollections}>Select Collections</s-button>
+          {targets.length > 0 && (
+            <s-stack gap="base">
+              {targets.map((target) => (
+                <s-stack
+                  key={target.id}
+                  direction="inline"
+                  alignItems="center"
+                  justifyContent="space-between"
+                >
+                  <s-text>{target.title}</s-text>
+                  <s-button variant="tertiary" onClick={() => removeTarget(target.id)}>
+                    <s-icon type="x-circle" />
+                  </s-button>
+                </s-stack>
+              ))}
+            </s-stack>
+          )}
+        </s-stack>
+      )}
+    </s-stack>
+  );
 
   return (
     <s-page heading="Create Discount Rule">
@@ -260,23 +389,60 @@ export default function NewDiscountPage() {
         </s-stack>
       </s-section>
 
-      <s-section heading="Threshold Settings">
+      <s-section heading="Required Products (Trigger Condition)">
         <s-stack gap="base">
+          <s-text tone="neutral">
+            Select which products must be in the cart to trigger the discount.
+            Customers need to add the minimum quantity of these products.
+          </s-text>
+
           <s-number-field
-            label="Minimum Products"
+            label="Minimum Quantity Required"
             value={minProducts}
             onChange={(event) => setMinProducts(String(event.currentTarget.value))}
             min={1}
           />
-          <s-text tone="neutral">Number of products required before discount applies (e.g., 6 means 7th product onwards gets discount)</s-text>
+          <s-text tone="neutral">
+            Number of required products needed in cart before discount applies
+          </s-text>
+
+          {renderTargetSelector(
+            "required",
+            requiredTargetType,
+            setRequiredTargetType,
+            requiredTargets,
+            handleSelectRequiredProducts,
+            handleSelectRequiredCollections,
+            removeRequiredTarget
+          )}
+        </s-stack>
+      </s-section>
+
+      <s-section heading="Discounted Products (What Gets Discounted)">
+        <s-stack gap="base">
+          <s-text tone="neutral">
+            Select which products will receive the discount once the condition is met.
+          </s-text>
+
+          {renderTargetSelector(
+            "discounted",
+            discountedTargetType,
+            setDiscountedTargetType,
+            discountedTargets,
+            handleSelectDiscountedProducts,
+            handleSelectDiscountedCollections,
+            removeDiscountedTarget
+          )}
 
           <s-number-field
-            label="Maximum Discounted Products"
+            label="Maximum Products to Discount"
             value={maxDiscounted}
             onChange={(event) => setMaxDiscounted(String(event.currentTarget.value))}
             min={1}
           />
-          <s-text tone="neutral">Leave empty for unlimited. Limits how many products after threshold get discounted.</s-text>
+          <s-text tone="neutral">
+            Leave empty for unlimited. Limits how many products get discounted.
+          </s-text>
         </s-stack>
       </s-section>
 
@@ -302,94 +468,25 @@ export default function NewDiscountPage() {
         </s-stack>
       </s-section>
 
-      <s-section heading="Applies To">
-        <s-stack gap="base">
-          <s-select
-            label="Apply discount to"
-            value={targetType}
-            onChange={(event) => {
-              setTargetType(event.currentTarget.value);
-              if (event.currentTarget.value === "all") {
-                setTargets([]);
-              }
-            }}
-          >
-            <s-option value="all">All Products</s-option>
-            <s-option value="product">Specific Products</s-option>
-            <s-option value="collection">Specific Collections</s-option>
-          </s-select>
-
-          {targetType === "product" && (
-            <s-stack gap="base">
-              <s-button onClick={handleSelectProducts}>Select Products</s-button>
-              {targets.length > 0 && (
-                <s-stack gap="base">
-                  {targets.map((target) => (
-                    <s-stack
-                      key={target.id}
-                      direction="inline"
-                      alignItems="center"
-                      justifyContent="space-between"
-                    >
-                      <s-text>{target.title}</s-text>
-                      <s-button variant="tertiary" onClick={() => removeTarget(target.id)}>
-                        <s-icon type="x-circle" />
-                      </s-button>
-                    </s-stack>
-                  ))}
-                </s-stack>
-              )}
-            </s-stack>
-          )}
-
-          {targetType === "collection" && (
-            <s-stack gap="base">
-              <s-button onClick={handleSelectCollections}>Select Collections</s-button>
-              {targets.length > 0 && (
-                <s-stack gap="base">
-                  {targets.map((target) => (
-                    <s-stack
-                      key={target.id}
-                      direction="inline"
-                      alignItems="center"
-                      justifyContent="space-between"
-                    >
-                      <s-link
-                        href={`shopify://admin/collections/${target.id.split("/").pop()}`}
-                        target="_blank"
-                      >
-                        {target.title}
-                      </s-link>
-                      <s-button variant="tertiary" onClick={() => removeTarget(target.id)}>
-                        <s-icon type="x-circle" />
-                      </s-button>
-                    </s-stack>
-                  ))}
-                </s-stack>
-              )}
-            </s-stack>
-          )}
-        </s-stack>
-      </s-section>
-
-      <s-section slot="aside" heading="Example">
+      <s-section slot="aside" heading="How It Works">
+        <s-heading>Step 1: Required Products</s-heading>
         <s-paragraph>
-          With a minimum of <s-text>{minProducts || "6"}</s-text> products:
+          Customer adds {minProducts || "X"} items from the required products to their cart.
         </s-paragraph>
-        <s-unordered-list>
-          <s-list-item>Products 1-{minProducts || "6"}: Full price</s-list-item>
-          <s-list-item>
-            Products {parseInt(minProducts || "6", 10) + 1}+:{" "}
-            {discountType === "percentage"
-              ? `${discountValue || "10"}% off`
-              : `$${discountValue || "10"} off`}
-          </s-list-item>
-          {maxDiscounted && (
-            <s-list-item>Maximum {maxDiscounted} products discounted</s-list-item>
-          )}
-        </s-unordered-list>
+
+        <s-heading>Step 2: Discount Applied</s-heading>
         <s-paragraph>
-          <s-text tone="neutral">Cheapest qualifying products are discounted first.</s-text>
+          Products from the "discounted" selection get{" "}
+          {discountType === "percentage"
+            ? `${discountValue || "10"}% off`
+            : `$${discountValue || "10"} off`}
+          {maxDiscounted ? ` (up to ${maxDiscounted} items)` : ""}.
+        </s-paragraph>
+
+        <s-heading>Example:</s-heading>
+        <s-paragraph>
+          "Buy 6 T-shirts, get jeans 20% off" - Set T-shirts as required products (min 6),
+          and Jeans as discounted products.
         </s-paragraph>
       </s-section>
     </s-page>

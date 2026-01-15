@@ -42,12 +42,20 @@ export function run(input) {
     maxDiscounted = null,
     discountType = "percentage",
     discountValue = 0,
-    targetType = "all",
-    targetIds = [],
+    // New separate targeting
+    requiredTargetType = "all",
+    requiredTargetIds = [],
+    discountedTargetType = "all",
+    discountedTargetIds = [],
+    // Legacy support
+    targetType,
+    targetIds,
   } = config;
 
   console.error("MIN PRODUCTS:", minProducts);
   console.error("DISCOUNT:", discountType, discountValue);
+  console.error("REQUIRED TARGET TYPE:", requiredTargetType);
+  console.error("DISCOUNTED TARGET TYPE:", discountedTargetType);
 
   // Get cart lines
   const cartLines = input?.cart?.lines || [];
@@ -55,8 +63,9 @@ export function run(input) {
     return EMPTY_DISCOUNT;
   }
 
-  // Collect eligible items
-  const eligibleItems = [];
+  // Count required products in cart
+  let requiredProductCount = 0;
+  const discountableItems = [];
 
   for (const line of cartLines) {
     const merchandise = line.merchandise;
@@ -66,58 +75,96 @@ export function run(input) {
     const productId = product?.id;
     if (!productId) continue;
 
-    // Check if product is eligible based on target type
-    let isEligible = false;
+    const price = parseFloat(line.cost?.amountPerQuantity?.amount || "0");
+    const quantity = line.quantity || 0;
 
-    if (targetType === "all") {
-      isEligible = true;
-    } else if (targetType === "product" && targetIds.length > 0) {
-      isEligible = targetIds.includes(productId);
-    } else if (targetType === "collection" && targetIds.length > 0) {
-      // For collection targeting, check if product is in the target collections
-      // This requires the product's collection IDs to be available in the query
-      isEligible = targetIds.includes(productId);
+    // Check if product counts toward the required quantity
+    let isRequired = false;
+    // Handle legacy config (single targetType/targetIds)
+    if (targetType && !requiredTargetType) {
+      // Legacy mode - same products are both required and discounted
+      if (targetType === "all") {
+        isRequired = true;
+      } else if (targetType === "product" && targetIds?.length > 0) {
+        isRequired = targetIds.includes(productId);
+      } else if (targetType === "collection" && targetIds?.length > 0) {
+        isRequired = targetIds.includes(productId);
+      }
+    } else {
+      // New mode - separate required and discounted products
+      if (requiredTargetType === "all") {
+        isRequired = true;
+      } else if (requiredTargetType === "product" && requiredTargetIds.length > 0) {
+        isRequired = requiredTargetIds.includes(productId);
+      } else if (requiredTargetType === "collection" && requiredTargetIds.length > 0) {
+        isRequired = requiredTargetIds.includes(productId);
+      }
     }
 
-    if (isEligible) {
-      const price = parseFloat(line.cost?.amountPerQuantity?.amount || "0");
-      const quantity = line.quantity || 0;
-      const variantId = merchandise.id;
+    if (isRequired) {
+      requiredProductCount += quantity;
+    }
 
-      // Add each unit as a separate item for sorting
+    // Check if product can be discounted
+    let isDiscountable = false;
+    // Handle legacy config
+    if (targetType && !discountedTargetType) {
+      // Legacy mode - same products are both required and discounted
+      if (targetType === "all") {
+        isDiscountable = true;
+      } else if (targetType === "product" && targetIds?.length > 0) {
+        isDiscountable = targetIds.includes(productId);
+      } else if (targetType === "collection" && targetIds?.length > 0) {
+        isDiscountable = targetIds.includes(productId);
+      }
+    } else {
+      // New mode - separate required and discounted products
+      if (discountedTargetType === "all") {
+        isDiscountable = true;
+      } else if (discountedTargetType === "product" && discountedTargetIds.length > 0) {
+        isDiscountable = discountedTargetIds.includes(productId);
+      } else if (discountedTargetType === "collection" && discountedTargetIds.length > 0) {
+        isDiscountable = discountedTargetIds.includes(productId);
+      }
+    }
+
+    if (isDiscountable) {
+      // Add each unit as a separate item for potential discounting
       for (let i = 0; i < quantity; i++) {
-        eligibleItems.push({
+        discountableItems.push({
           cartLineId: line.id,
-          variantId: variantId,
+          productId: productId,
           price,
         });
       }
     }
   }
 
-  const totalEligible = eligibleItems.length;
-  console.error("TOTAL ELIGIBLE ITEMS:", totalEligible);
-  console.error("ELIGIBLE ITEMS:", JSON.stringify(eligibleItems));
+  console.error("REQUIRED PRODUCT COUNT:", requiredProductCount);
+  console.error("DISCOUNTABLE ITEMS COUNT:", discountableItems.length);
 
-  // If we don't have enough products to exceed threshold, no discount
-  // Need MORE than minProducts to get any discount
-  if (totalEligible <= minProducts) {
-    console.error("NOT ENOUGH ITEMS. Need >", minProducts, "have", totalEligible);
+  // Check if we have enough required products
+  if (requiredProductCount < minProducts) {
+    console.error("NOT ENOUGH REQUIRED PRODUCTS. Need:", minProducts, "have:", requiredProductCount);
     return EMPTY_DISCOUNT;
   }
 
-  // Sort by price DESCENDING (most expensive first)
-  // We want to keep the most expensive items at full price
-  eligibleItems.sort((a, b) => b.price - a.price);
+  // If no discountable items, no discount
+  if (discountableItems.length === 0) {
+    console.error("NO DISCOUNTABLE ITEMS IN CART");
+    return EMPTY_DISCOUNT;
+  }
+
+  // Sort discountable items by price (cheapest first for discounting)
+  discountableItems.sort((a, b) => a.price - b.price);
 
   // Calculate how many items get discounted
-  const itemsAfterThreshold = totalEligible - minProducts;
   const itemsToDiscount = maxDiscounted
-    ? Math.min(itemsAfterThreshold, maxDiscounted)
-    : itemsAfterThreshold;
+    ? Math.min(discountableItems.length, maxDiscounted)
+    : discountableItems.length;
 
-  // Take the cheapest items (after skipping the most expensive minProducts items)
-  const discountedItems = eligibleItems.slice(minProducts, minProducts + itemsToDiscount);
+  // Take the items to discount
+  const discountedItems = discountableItems.slice(0, itemsToDiscount);
 
   console.error("ITEMS TO DISCOUNT:", itemsToDiscount);
   console.error("DISCOUNTED ITEMS:", JSON.stringify(discountedItems));
@@ -133,17 +180,17 @@ export function run(input) {
     const key = item.cartLineId;
     if (!lineQuantities[key]) {
       lineQuantities[key] = {
-        variantId: item.variantId,
+        cartLineId: item.cartLineId,
         quantity: 0
       };
     }
     lineQuantities[key].quantity += 1;
   }
 
-  // Create discount targets
+  // Create discount targets using cartLine
   const targets = Object.entries(lineQuantities).map(([lineId, data]) => ({
-    productVariant: {
-      id: data.variantId,
+    cartLine: {
+      id: data.cartLineId,
       quantity: data.quantity,
     },
   }));

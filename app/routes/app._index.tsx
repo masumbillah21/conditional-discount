@@ -1,10 +1,49 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
 import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
+
+// Component for handling Shopify web component button clicks
+function ActionButton({
+  onClick,
+  variant,
+  tone,
+  slot,
+  children,
+}: {
+  onClick: () => void;
+  variant?: "auto" | "primary" | "secondary" | "tertiary";
+  tone?: "auto" | "neutral" | "critical";
+  slot?: string;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLElement | null>(null);
+  const callbackRef = useRef(onClick);
+  callbackRef.current = onClick;
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const handler = () => callbackRef.current();
+    element.addEventListener("click", handler);
+    return () => element.removeEventListener("click", handler);
+  }, []);
+
+  return (
+    <s-button
+      ref={ref as React.RefObject<any>}
+      variant={variant}
+      tone={tone}
+      slot={slot as Lowercase<string>}
+    >
+      {children}
+    </s-button>
+  );
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -136,9 +175,9 @@ export default function Index() {
 
   return (
     <s-page heading="Conditional Discounts">
-      <s-button slot="primary-action" onClick={() => navigate("/app/discounts/new")}>
+      <ActionButton slot="primary-action" onClick={() => navigate("/app/discounts/new")}>
         Create Discount Rule
-      </s-button>
+      </ActionButton>
 
       {discountRules.length === 0 ? (
         <s-section>
@@ -149,9 +188,9 @@ export default function Index() {
                 Create your first conditional discount rule to offer discounts after customers add a
                 certain number of products to their cart.
               </s-paragraph>
-              <s-button variant="primary" onClick={() => navigate("/app/discounts/new")}>
+              <ActionButton variant="primary" onClick={() => navigate("/app/discounts/new")}>
                 Create Discount Rule
-              </s-button>
+              </ActionButton>
             </s-stack>
           </s-box>
         </s-section>
@@ -175,15 +214,25 @@ export default function Index() {
                       </s-text>
                     </s-stack>
                     <s-stack direction="inline" gap="base">
-                      <s-button variant="tertiary" onClick={() => navigate(`/app/discounts/${rule.id}`)}>
+                      <ActionButton
+                        variant="tertiary"
+                        onClick={() => navigate(`/app/discounts/${rule.id}`)}
+                      >
                         Edit
-                      </s-button>
-                      <s-button variant="tertiary" onClick={() => handleToggle(rule.id)}>
+                      </ActionButton>
+                      <ActionButton
+                        variant="tertiary"
+                        onClick={() => handleToggle(rule.id)}
+                      >
                         {rule.status === "active" ? "Deactivate" : "Activate"}
-                      </s-button>
-                      <s-button variant="tertiary" tone="critical" onClick={() => handleDelete(rule.id)}>
+                      </ActionButton>
+                      <ActionButton
+                        variant="tertiary"
+                        tone="critical"
+                        onClick={() => handleDelete(rule.id)}
+                      >
                         Delete
-                      </s-button>
+                      </ActionButton>
                     </s-stack>
                   </s-stack>
 

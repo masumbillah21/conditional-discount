@@ -6,24 +6,23 @@ import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 
+interface Target {
+  id: string;
+  title: string;
+  type: string;
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
-  // Parse URL to check for query parameters
   const url = new URL(request.url);
   const idFromQuery = url.searchParams.get('id');
 
-  console.log("Params ID:", params.id);
-  console.log("Query ID:", idFromQuery);
-  console.log("Full URL:", request.url);
-
-  // Use query parameter if params.id is a placeholder
   let discountId = params.id;
   if (params.id?.startsWith(":") && idFromQuery) {
     discountId = idFromQuery;
   }
 
-  // If still a placeholder, return flag to handle client-side
   if (discountId?.startsWith(":")) {
     const firstDiscount = await prisma.discountRule.findFirst({
       where: { shop: session.shop },
@@ -37,7 +36,6 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     };
   }
 
-  // Try to find by both our internal ID and Shopify's discount ID
   const discountRule = await prisma.discountRule.findFirst({
     where: {
       OR: [
@@ -70,9 +68,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     : null;
   const discountType = formData.get("discountType") as string;
   const discountValue = parseFloat(formData.get("discountValue") as string);
-  const targetType = formData.get("targetType") as string;
-  const targetsJson = formData.get("targets") as string;
-  const targets = targetsJson ? JSON.parse(targetsJson) : [];
+
+  // Get required and discounted targets separately
+  const requiredTargetType = formData.get("requiredTargetType") as string;
+  const requiredTargetsJson = formData.get("requiredTargets") as string;
+  const requiredTargets = requiredTargetsJson ? JSON.parse(requiredTargetsJson) : [];
+
+  const discountedTargetType = formData.get("discountedTargetType") as string;
+  const discountedTargetsJson = formData.get("discountedTargets") as string;
+  const discountedTargets = discountedTargetsJson ? JSON.parse(discountedTargetsJson) : [];
 
   // Get existing rule
   const existingRule = await prisma.discountRule.findFirst({
@@ -83,10 +87,26 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return { success: false, error: "Discount rule not found" };
   }
 
-  // Delete old targets and create new ones
+  // Delete old targets
   await prisma.discountRuleTarget.deleteMany({
     where: { ruleId: params.id },
   });
+
+  // Create all targets with roles
+  const allTargets = [
+    ...requiredTargets.map((t: Target) => ({
+      targetType: t.type,
+      targetId: t.id,
+      targetTitle: t.title,
+      role: "required",
+    })),
+    ...discountedTargets.map((t: Target) => ({
+      targetType: t.type,
+      targetId: t.id,
+      targetTitle: t.title,
+      role: "discounted",
+    })),
+  ];
 
   // Update the discount rule
   const discountRule = await prisma.discountRule.update({
@@ -98,11 +118,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       discountType,
       discountValue,
       targets: {
-        create: targets.map((t: { id: string; title: string; type: string }) => ({
-          targetType: t.type,
-          targetId: t.id,
-          targetTitle: t.title,
-        })),
+        create: allTargets,
       },
     },
     include: { targets: true },
@@ -114,8 +130,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     maxDiscounted,
     discountType,
     discountValue,
-    targetType,
-    targetIds: targets.map((t: { id: string }) => t.id),
+    requiredTargetType,
+    requiredTargetIds: requiredTargets.map((t: Target) => t.id),
+    discountedTargetType,
+    discountedTargetIds: discountedTargets.map((t: Target) => t.id),
   };
 
   // Update Shopify discount if exists
@@ -161,28 +179,21 @@ export default function EditDiscountPage() {
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
 
-  // Initialize all state hooks BEFORE any conditional logic
-  const [name, setName] = useState(discountRule?.name || "");
-  const [minProducts, setMinProducts] = useState(discountRule ? String(discountRule.minProducts) : "1");
-  const [maxDiscounted, setMaxDiscounted] = useState(
-    discountRule?.maxDiscounted ? String(discountRule.maxDiscounted) : ""
-  );
-  const [discountType, setDiscountType] = useState(discountRule?.discountType || "percentage");
-  const [discountValue, setDiscountValue] = useState(discountRule ? String(discountRule.discountValue) : "0");
-  const [targetType, setTargetType] = useState(
-    discountRule?.targets && discountRule.targets.length > 0 ? discountRule.targets[0].targetType : "all"
-  );
-  const [targets, setTargets] = useState<{ id: string; title: string; type: string }[]>(
-    discountRule?.targets ? discountRule.targets.map((t) => ({
-      id: t.targetId,
-      title: t.targetTitle,
-      type: t.targetType,
-    })) : []
-  );
+  // Initialize all state hooks
+  const [name, setName] = useState("");
+  const [minProducts, setMinProducts] = useState("1");
+  const [maxDiscounted, setMaxDiscounted] = useState("");
+  const [discountType, setDiscountType] = useState("percentage");
+  const [discountValue, setDiscountValue] = useState("0");
+
+  // Required and discounted targets
+  const [requiredTargetType, setRequiredTargetType] = useState("all");
+  const [requiredTargets, setRequiredTargets] = useState<Target[]>([]);
+  const [discountedTargetType, setDiscountedTargetType] = useState("all");
+  const [discountedTargets, setDiscountedTargets] = useState<Target[]>([]);
 
   const isLoading = fetcher.state === "submitting";
 
-  // ALL useEffect hooks MUST be before any conditional returns
   // Handle client-side redirect
   useEffect(() => {
     if (redirectTo) {
@@ -190,11 +201,68 @@ export default function EditDiscountPage() {
     }
   }, [redirectTo, navigate]);
 
+  // Sync state with loader data when discountRule changes
+  useEffect(() => {
+    if (discountRule) {
+      setName(discountRule.name || "");
+      setMinProducts(String(discountRule.minProducts));
+      setMaxDiscounted(discountRule.maxDiscounted ? String(discountRule.maxDiscounted) : "");
+      setDiscountType(discountRule.discountType || "percentage");
+      setDiscountValue(String(discountRule.discountValue));
+
+      // Separate targets by role (cast to any to handle new field before Prisma regeneration)
+      const targets = discountRule.targets as Array<{ id: string; targetType: string; targetId: string; targetTitle: string; role?: string }>;
+      const required = targets?.filter((t) => t.role === "required") || [];
+      const discounted = targets?.filter((t) => t.role === "discounted") || [];
+
+      // For backward compatibility, if no role is set, treat all as required
+      const legacyTargets = targets?.filter((t) => !t.role) || [];
+
+      if (required.length > 0) {
+        setRequiredTargetType(required[0].targetType);
+        setRequiredTargets(
+          required.map((t) => ({
+            id: t.targetId,
+            title: t.targetTitle,
+            type: t.targetType,
+          }))
+        );
+      } else if (legacyTargets.length > 0) {
+        // Backward compatibility
+        setRequiredTargetType(legacyTargets[0].targetType);
+        setRequiredTargets(
+          legacyTargets.map((t) => ({
+            id: t.targetId,
+            title: t.targetTitle,
+            type: t.targetType,
+          }))
+        );
+      } else {
+        setRequiredTargetType("all");
+        setRequiredTargets([]);
+      }
+
+      if (discounted.length > 0) {
+        setDiscountedTargetType(discounted[0].targetType);
+        setDiscountedTargets(
+          discounted.map((t) => ({
+            id: t.targetId,
+            title: t.targetTitle,
+            type: t.targetType,
+          }))
+        );
+      } else {
+        setDiscountedTargetType("all");
+        setDiscountedTargets([]);
+      }
+    }
+  }, [discountRule]);
+
   // Handle form submission result
   useEffect(() => {
     if (fetcher.data?.success) {
       shopify.toast.show("Discount rule updated successfully");
-      navigate("/app/discounts");
+      navigate("/app");
     } else if (fetcher.data?.error) {
       shopify.toast.show("Error updating discount", { isError: true });
     }
@@ -211,15 +279,15 @@ export default function EditDiscountPage() {
     );
   }
 
-  const handleSelectProducts = async () => {
+  // Handlers for required products
+  const handleSelectRequiredProducts = async () => {
     const selected = await shopify.resourcePicker({
       type: "product",
       multiple: true,
-      selectionIds: targets.filter((t) => t.type === "product").map((t) => ({ id: t.id })),
+      selectionIds: requiredTargets.filter((t) => t.type === "product").map((t) => ({ id: t.id })),
     });
-
     if (selected) {
-      setTargets(
+      setRequiredTargets(
         selected.map((p: { id: string; title: string }) => ({
           id: p.id,
           title: p.title,
@@ -229,15 +297,14 @@ export default function EditDiscountPage() {
     }
   };
 
-  const handleSelectCollections = async () => {
+  const handleSelectRequiredCollections = async () => {
     const selected = await shopify.resourcePicker({
       type: "collection",
       multiple: true,
-      selectionIds: targets.filter((t) => t.type === "collection").map((t) => ({ id: t.id })),
+      selectionIds: requiredTargets.filter((t) => t.type === "collection").map((t) => ({ id: t.id })),
     });
-
     if (selected) {
-      setTargets(
+      setRequiredTargets(
         selected.map((c: { id: string; title: string }) => ({
           id: c.id,
           title: c.title,
@@ -247,8 +314,47 @@ export default function EditDiscountPage() {
     }
   };
 
-  const removeTarget = (id: string) => {
-    setTargets(targets.filter((t) => t.id !== id));
+  const removeRequiredTarget = (id: string) => {
+    setRequiredTargets(requiredTargets.filter((t) => t.id !== id));
+  };
+
+  // Handlers for discounted products
+  const handleSelectDiscountedProducts = async () => {
+    const selected = await shopify.resourcePicker({
+      type: "product",
+      multiple: true,
+      selectionIds: discountedTargets.filter((t) => t.type === "product").map((t) => ({ id: t.id })),
+    });
+    if (selected) {
+      setDiscountedTargets(
+        selected.map((p: { id: string; title: string }) => ({
+          id: p.id,
+          title: p.title,
+          type: "product",
+        }))
+      );
+    }
+  };
+
+  const handleSelectDiscountedCollections = async () => {
+    const selected = await shopify.resourcePicker({
+      type: "collection",
+      multiple: true,
+      selectionIds: discountedTargets.filter((t) => t.type === "collection").map((t) => ({ id: t.id })),
+    });
+    if (selected) {
+      setDiscountedTargets(
+        selected.map((c: { id: string; title: string }) => ({
+          id: c.id,
+          title: c.title,
+          type: "collection",
+        }))
+      );
+    }
+  };
+
+  const removeDiscountedTarget = (id: string) => {
+    setDiscountedTargets(discountedTargets.filter((t) => t.id !== id));
   };
 
   const handleSubmit = () => {
@@ -258,11 +364,90 @@ export default function EditDiscountPage() {
     if (maxDiscounted) formData.append("maxDiscounted", maxDiscounted);
     formData.append("discountType", discountType);
     formData.append("discountValue", discountValue);
-    formData.append("targetType", targetType);
-    formData.append("targets", JSON.stringify(targets));
+    formData.append("requiredTargetType", requiredTargetType);
+    formData.append("requiredTargets", JSON.stringify(requiredTargets));
+    formData.append("discountedTargetType", discountedTargetType);
+    formData.append("discountedTargets", JSON.stringify(discountedTargets));
 
     fetcher.submit(formData, { method: "POST" });
   };
+
+  const renderTargetSelector = (
+    role: "required" | "discounted",
+    targetType: string,
+    setTargetType: (value: string) => void,
+    targets: Target[],
+    handleSelectProducts: () => void,
+    handleSelectCollections: () => void,
+    removeTarget: (id: string) => void
+  ) => (
+    <s-stack gap="base">
+      <s-select
+        label={role === "required" ? "Required products type" : "Discounted products type"}
+        value={targetType}
+        onChange={(event) => {
+          setTargetType(event.currentTarget.value);
+          if (event.currentTarget.value === "all") {
+            if (role === "required") {
+              setRequiredTargets([]);
+            } else {
+              setDiscountedTargets([]);
+            }
+          }
+        }}
+      >
+        <s-option value="all">All Products</s-option>
+        <s-option value="product">Specific Products</s-option>
+        <s-option value="collection">Specific Collections</s-option>
+      </s-select>
+
+      {targetType === "product" && (
+        <s-stack gap="base">
+          <s-button onClick={handleSelectProducts}>Select Products</s-button>
+          {targets.length > 0 && (
+            <s-stack gap="base">
+              {targets.map((target) => (
+                <s-stack
+                  key={target.id}
+                  direction="inline"
+                  alignItems="center"
+                  justifyContent="space-between"
+                >
+                  <s-text>{target.title}</s-text>
+                  <s-button variant="tertiary" onClick={() => removeTarget(target.id)}>
+                    <s-icon type="x-circle" />
+                  </s-button>
+                </s-stack>
+              ))}
+            </s-stack>
+          )}
+        </s-stack>
+      )}
+
+      {targetType === "collection" && (
+        <s-stack gap="base">
+          <s-button onClick={handleSelectCollections}>Select Collections</s-button>
+          {targets.length > 0 && (
+            <s-stack gap="base">
+              {targets.map((target) => (
+                <s-stack
+                  key={target.id}
+                  direction="inline"
+                  alignItems="center"
+                  justifyContent="space-between"
+                >
+                  <s-text>{target.title}</s-text>
+                  <s-button variant="tertiary" onClick={() => removeTarget(target.id)}>
+                    <s-icon type="x-circle" />
+                  </s-button>
+                </s-stack>
+              ))}
+            </s-stack>
+          )}
+        </s-stack>
+      )}
+    </s-stack>
+  );
 
   return (
     <s-page heading="Edit Discount Rule">
@@ -294,23 +479,60 @@ export default function EditDiscountPage() {
         </s-stack>
       </s-section>
 
-      <s-section heading="Threshold Settings">
+      <s-section heading="Required Products (Trigger Condition)">
         <s-stack gap="base">
+          <s-text tone="neutral">
+            Select which products must be in the cart to trigger the discount.
+            Customers need to add the minimum quantity of these products.
+          </s-text>
+
           <s-number-field
-            label="Minimum Products"
+            label="Minimum Quantity Required"
             value={minProducts}
             onChange={(event) => setMinProducts(String(event.currentTarget.value))}
             min={1}
           />
-          <s-text tone="neutral">Number of products required before discount applies</s-text>
+          <s-text tone="neutral">
+            Number of required products needed in cart before discount applies
+          </s-text>
+
+          {renderTargetSelector(
+            "required",
+            requiredTargetType,
+            setRequiredTargetType,
+            requiredTargets,
+            handleSelectRequiredProducts,
+            handleSelectRequiredCollections,
+            removeRequiredTarget
+          )}
+        </s-stack>
+      </s-section>
+
+      <s-section heading="Discounted Products (What Gets Discounted)">
+        <s-stack gap="base">
+          <s-text tone="neutral">
+            Select which products will receive the discount once the condition is met.
+          </s-text>
+
+          {renderTargetSelector(
+            "discounted",
+            discountedTargetType,
+            setDiscountedTargetType,
+            discountedTargets,
+            handleSelectDiscountedProducts,
+            handleSelectDiscountedCollections,
+            removeDiscountedTarget
+          )}
 
           <s-number-field
-            label="Maximum Discounted Products"
+            label="Maximum Products to Discount"
             value={maxDiscounted}
             onChange={(event) => setMaxDiscounted(String(event.currentTarget.value))}
             min={1}
           />
-          <s-text tone="neutral">Leave empty for unlimited</s-text>
+          <s-text tone="neutral">
+            Leave empty for unlimited. Limits how many products get discounted.
+          </s-text>
         </s-stack>
       </s-section>
 
@@ -336,98 +558,25 @@ export default function EditDiscountPage() {
         </s-stack>
       </s-section>
 
-      <s-section heading="Applies To">
-        <s-stack gap="base">
-          <s-select
-            label="Apply discount to"
-            value={targetType}
-            onChange={(event) => {
-              setTargetType(event.currentTarget.value);
-              if (event.currentTarget.value === "all") {
-                setTargets([]);
-              }
-            }}
-          >
-            <s-option value="all">All Products</s-option>
-            <s-option value="product">Specific Products</s-option>
-            <s-option value="collection">Specific Collections</s-option>
-          </s-select>
-
-          {targetType === "product" && (
-            <s-stack gap="base">
-              <s-button onClick={handleSelectProducts}>Select Products</s-button>
-              {targets.length > 0 && (
-                <s-stack gap="base">
-                  {targets.map((target) => (
-                    <s-stack
-                      key={target.id}
-                      direction="inline"
-                      alignItems="center"
-                      justifyContent="space-between"
-                    >
-                      <s-text>{target.title}</s-text>
-                      <s-button variant="tertiary" onClick={() => removeTarget(target.id)}>
-                        <s-icon type="x-circle" />
-                      </s-button>
-                    </s-stack>
-                  ))}
-                </s-stack>
-              )}
-            </s-stack>
-          )}
-
-          {targetType === "collection" && (
-            <s-stack gap="base">
-              <s-button onClick={handleSelectCollections}>Select Collections</s-button>
-              {targets.length > 0 && (
-                <s-stack gap="base">
-                  {targets.map((target) => (
-                    <s-stack
-                      key={target.id}
-                      direction="inline"
-                      alignItems="center"
-                      justifyContent="space-between"
-                    >
-                      <s-link
-                        href={`shopify://admin/collections/${target.id.split("/").pop()}`}
-                        target="_blank"
-                      >
-                        {target.title}
-                      </s-link>
-                      <s-button variant="tertiary" onClick={() => removeTarget(target.id)}>
-                        <s-icon type="x-circle" />
-                      </s-button>
-                    </s-stack>
-                  ))}
-                </s-stack>
-              )}
-            </s-stack>
-          )}
-        </s-stack>
-      </s-section>
-
-      <s-section slot="aside" heading="Current Configuration">
+      <s-section slot="aside" heading="How It Works">
+        <s-heading>Step 1: Required Products</s-heading>
         <s-paragraph>
-          Minimum threshold: <s-text>{minProducts}</s-text> products
+          Customer adds {minProducts || "X"} items from the required products to their cart.
         </s-paragraph>
+
+        <s-heading>Step 2: Discount Applied</s-heading>
         <s-paragraph>
-          Discount:{" "}
-          <s-text>
-            {discountType === "percentage" ? `${discountValue}%` : `$${discountValue}`}
-          </s-text>
+          Products from the "discounted" selection get{" "}
+          {discountType === "percentage"
+            ? `${discountValue || "10"}% off`
+            : `$${discountValue || "10"} off`}
+          {maxDiscounted ? ` (up to ${maxDiscounted} items)` : ""}.
         </s-paragraph>
-        {maxDiscounted && (
-          <s-paragraph>
-            Max discounted: <s-text>{maxDiscounted}</s-text> products
-          </s-paragraph>
-        )}
+
+        <s-heading>Example:</s-heading>
         <s-paragraph>
-          Applies to:{" "}
-          <s-text>
-            {targetType === "all"
-              ? "All products"
-              : `${targets.length} ${targetType}(s)`}
-          </s-text>
+          "Buy 6 T-shirts, get jeans 20% off" - Set T-shirts as required products (min 6),
+          and Jeans as discounted products.
         </s-paragraph>
       </s-section>
     </s-page>
