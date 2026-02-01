@@ -2,7 +2,7 @@
 
 client_id = "e5822a27bd9317066a55798608b429fb"
 name = "Conditional Discount"
-application_url = "https://masum-billah.com"
+application_url = "https://app.masum-billah.com"
 embedded = true
 
 [webhooks]
@@ -16,12 +16,24 @@ api_version = "2026-04"
   topics = [ "app/uninstalled" ]
   uri = "/webhooks/app/uninstalled"
 
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/data_request" ]
+  uri = "/webhooks/customers/data_request"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/redact" ]
+  uri = "/webhooks/customers/redact"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "shop/redact" ]
+  uri = "/webhooks/shop/redact"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_discounts,write_discounts,write_products"
 
 [auth]
-redirect_urls = [ "https://masum-billah.com/auth/callback" ]
+redirect_urls = [ "https://app.masum-billah.com/auth/callback" ]
 
 [build]
 automatically_update_urls_on_dev = true
